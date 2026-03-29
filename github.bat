@@ -36,8 +36,8 @@ goto END
 :: =============================
 :PULL
 echo ----------------------------------
-echo ⬇️ 正在拉更新...
-git pull %REPO_URL% main
+echo ⬇️ 正在強制拉取更新 (認親模式)...
+git pull %REPO_URL% main --allow-unrelated-histories
 echo ✅ 完成！
 goto END
 
@@ -68,8 +68,10 @@ if exist "temp_git.txt" del temp_git.txt
 goto PUSH_CLOUD
 
 :DO_COMMIT_LOGIC
-rem 3. 確定有變更才 add
+rem 確定有變更，先刪除暫存檔再 add，或是直接 add 排除它
+if exist "temp_git.txt" del temp_git.txt
 git add .
+set /p input_msg=請輸入 Commit 訊息 (Enter 自動時間):
 
 set FILE_SIZE=0
 for %%i in (temp_git.txt) do set FILE_SIZE=%%~zi
