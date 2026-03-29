@@ -1,0 +1,21 @@
+{
+  "name": "rich2_editor",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/iconv-lite": "^0.0.1",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.1",
+    "vite-plugin-node-polyfills": "^0.25.0"
+  },
+  "dependencies": {
+    "buffer": "^6.0.3",
+    "iconv-lite": "^0.7.2"
+  }
+}

@@ -1,0 +1,288 @@
+import iconv from 'iconv-lite';
+
+import {
+  Buffer
+}
+
+from 'buffer';
+
+// 解決瀏覽器環境缺乏 Node.js Buffer 的問題
+if (typeof window !=='undefined') {
+  window.Buffer=window.Buffer || Buffer as any;
+}
+
+// 新增一個全域變數，用來記住 PAK 解壓出來的完整文字內容
+let pakTextLines: string[]=[];
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  margin: 20px;
+}
+
+.container {
+  display: flex;
+  gap: 20px;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  margin: 20px;
+}
+
+.container {
+  display: flex;
+  gap: 20px;
+}
+
+.panel {
+  background-color: #2d2d2d;
+  padding: 15px;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* 地圖是 36x36, 每個區塊 24x20 */
+#mapCanvas {
+  background-color: #000;
+  border: 2px solid #555;
+  cursor: crosshair;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+button,
+input[type="file"] {
+  background-color: #0e639c;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: #1177bb;
+}
+
+#infoBox {
+  font-family: monospace;
+  background: #1e1e1e;
+  padding: 10px;
+  border-left: 4px solid #0e639c;
+  height: 200px;
+  overflow-y: auto;
+}
+
+/* 點擊選單 */
+#editPanel {
+  display: none;
+  background: #252526;
+  border: 1px solid #0e639c;
+  border-radius: 8px;
+  padding: 14px;
+  margin-top: 12px;
+}
+
+#editPanel h4 {
+  margin: 0 0 10px 0;
+  color: #9cdcfe;
+  font-size: 14px;
+}
+
+#editPanel label {
+  display: block;
+  font-size: 12px;
+  color: #9cdcfe;
+  margin-top: 8px;
+}
+
+#editPanel input[type="number"],
+#editPanel select {
+  width: 100%;
+  box-sizing: border-box;
+  background: #3c3c3c;
+  color: #d4d4d4;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.dir-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: auto auto auto;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.dir-grid input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dir-center {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #555;
+  font-size: 18px;
+}
+
+#tilePickerWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-height: 160px;
+  overflow-y: auto;
+  margin-top: 6px;
+  background: #1e1e1e;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.tile-btn {
+  width: 24px;
+  height: 20px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  padding: 0;
+  image-rendering: pixelated;
+}
+
+.tile-btn.selected {
+  border-color: #e51400;
+}
+
+#applyBtn {
+  margin-top: 10px;
+  width: 100%;
+  background: #0e639c;
+}
+
+/* 標籤頁 */
+.tab-bar {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 0;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 5px 4px;
+  background: #3c3c3c;
+  border: 1px solid #555;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  color: #aaa;
+  font-size: 11px;
+  text-align: center;
+}
+
+.tab-btn.active {
+  background: #252526;
+  color: #9cdcfe;
+  border-color: #0e639c;
+}
+
+.tab-pane {
+  display: none;
+}
+
+.tab-pane.active {
+  display: block;
+}
+
+/* 警告標籤 */
+.warn-badge {
+  background: #c55;
+  color: #fff;
+  border-radius: 3px;
+  font-size: 10px;
+  padding: 1px 4px;
+  margin-left: 4px;
+}
+
+/* 地點使用高亮 */
+.loc-used-cell {
+  outline: 2px solid #f0c040;
+}
+
+/* 價格表 */
+#priceTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+#priceTable th {
+  background: #1e1e1e;
+  color: #9cdcfe;
+  padding: 3px 5px;
+  text-align: left;
+  position: sticky;
+  top: 0;
+}
+
+#priceTable td {
+  padding: 2px 4px;
+  border-bottom: 1px solid #333;
+}
+
+#priceTable input {
+  width: 70px;
+  background: #3c3c3c;
+  color: #d4d4d4;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 1px 3px;
+  font-size: 11px;
+}
+
+.price-wrap {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 2px;
+}
+
+/* 警告列表 */
+#warnList {
+  font-size: 11px;
+  color: #f48771;
+  margin-top: 6px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+#warnList div {
+  padding: 2px 0;
+  border-bottom: 1px solid #3a3a3a;
+  cursor: pointer;
+}
+
+#warnList div:hover {
+  background: #2a2a2a;
+}
+
+#warnList div {
+  padding: 2px 0;
+  border-bottom: 1px solid #3a3a3a;
+  cursor: pointer;
+}
+
+#warnList div:hover {
+  background: #2a2a2a;
+}

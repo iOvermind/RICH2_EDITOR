@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>地圖區塊視覺化編輯器</title>
+
+</head>
+
+<body>
+
+  <h2>地圖區塊視覺化編輯器 (PART?.PAK)</h2>
+
+  <div class="container">
+    <div class="panel">
+      <!-- Canvas 大小: 36*24 = 864, 36*20 = 720 -->
+      <canvas id="mapCanvas" width="864" height="720"></canvas>
+    </div>
+
+    <div class="panel controls">
+      <div>
+        <label>1. 載入 PART?.PAK (地圖圖庫與屬性):</label><br>
+        <input type="file" id="mapFile" accept=".PAK">
+      </div>
+      <div>
+        <label>2. 載入 SAVE_?.DSK (存檔地圖排版):</label><br>
+        <input type="file" id="saveFile" accept=".DSK">
+      </div>
+
+      <hr style="border-color: #555; width: 100%;">
+
+      <h3>目前選取區塊</h3>
+      <div id="infoBox">
+        等待點擊...
+      </div>
+
+      <div id="editPanel">
+        <h4 id="editTitle" style="margin:0 0 6px 0;color:#9cdcfe;font-size:13px;">請點選地圖格子</h4>
+
+        <div class="tab-bar">
+          <div class="tab-btn active" data-tab="tabTile">圖塊</div>
+          <div class="tab-btn" data-tab="tabLoc">地點</div>
+          <div class="tab-btn" data-tab="tabPrice">價格</div>
+          <div class="tab-btn" data-tab="tabWarn">⚠ 警告</div>
+        </div>
+
+        <!-- 圖塊頁 -->
+        <div id="tabTile" class="tab-pane active"
+          style="border:1px solid #0e639c;padding:6px;border-radius:0 4px 4px 4px;">
+          <div style="font-size:11px;color:#888;margin-bottom:4px;">點選圖塊立即生效</div>
+          <div id="tilePickerWrap"></div>
+        </div>
+
+        <!-- 地點頁 -->
+        <div id="tabLoc" class="tab-pane" style="border:1px solid #0e639c;padding:8px;border-radius:0 4px 4px 4px;">
+          <label>地點編號 (loc ID):</label>
+          <input type="number" id="editLocId" min="0" max="282"
+            style="width:100%;box-sizing:border-box;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;margin-top:2px;">
+
+          <label style="margin-top:8px;display:block;">特殊地點代號 (0=土地/公園):</label>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:2px;">
+            <input type="number" id="editSpecial" min="0" max="10"
+              style="width:50px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+            <span id="specialNameDisplay" style="color:#ce9178;font-size:12px;"></span>
+          </div>
+
+          <label style="margin-top:8px;display:block;">地段編號 (0=非土地):</label>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:2px;">
+            <input type="number" id="editSegId" min="0" max="99"
+              style="width:50px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+            <span id="segNameDisplay" style="color:#4ec9b0;font-size:12px;"></span>
+            <button id="addSegBtn" title="新增地段"
+              style="padding:2px 7px;font-size:12px;background:#2d7a2d;border:none;border-radius:3px;color:#fff;cursor:pointer;">＋</button>
+          </div>
+
+          <label style="margin-top:8px;display:block;">可行進方向（下個地點編號，0=不通）:</label>
+          <div class="dir-grid" style="margin-top:4px;">
+            <div></div>
+            <div><input type="number" id="editDirUp" min="0" max="282" placeholder="上"
+                style="width:100%;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px;text-align:center;">
+            </div>
+            <div></div>
+            <div><input type="number" id="editDirLeft" min="0" max="282" placeholder="左"
+                style="width:100%;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px;text-align:center;">
+            </div>
+            <div class="dir-center">✦</div>
+            <div><input type="number" id="editDirRight" min="0" max="282" placeholder="右"
+                style="width:100%;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px;text-align:center;">
+            </div>
+            <div></div>
+            <div><input type="number" id="editDirDown" min="0" max="282" placeholder="下"
+                style="width:100%;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px;text-align:center;">
+            </div>
+            <div></div>
+          </div>
+          <div id="dirWarnMsg" style="font-size:11px;color:#f48771;margin-top:4px;min-height:14px;"></div>
+        </div>
+
+        <!-- 價格頁 -->
+        <div id="tabPrice" class="tab-pane" style="border:1px solid #0e639c;padding:8px;border-radius:0 4px 4px 4px;">
+          <div style="font-size:11px;color:#888;margin-bottom:4px;">目前地段：<span id="priceSegLabel"
+              style="color:#4ec9b0;">-</span></div>
+          <div class="price-wrap">
+            <table id="priceTable">
+              <thead>
+                <tr>
+                  <th>欄位</th>
+                  <th>數值</th>
+                </tr>
+              </thead>
+              <tbody id="priceTbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 警告頁 -->
+        <div id="tabWarn" class="tab-pane" style="border:1px solid #0e639c;padding:8px;border-radius:0 4px 4px 4px;">
+          <div style="font-size:11px;color:#888;">點擊警告可跳至該格子</div>
+          <div id="warnList"></div>
+        </div>
+      </div>
+
+      <button id="exportDskBtn">匯出 SAVE_?.DSK</button>
+      <button id="exportPakBtn">匯出 PART?.PAK</button>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>

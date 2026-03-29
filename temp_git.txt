@@ -1,0 +1,17 @@
+A  .gitignore
+A  editor.html
+A  github.bat
+A  github.sh
+A  index.html
+A  package-lock.json
+A  package.json
+A  public/favicon.svg
+A  public/icons.svg
+A  src/assets/hero.png
+A  src/assets/typescript.svg
+A  src/assets/vite.svg
+A  src/main.ts
+A  src/style.css
+A  tsconfig.json
+A  vite.config.ts
+?? temp_git.txt
