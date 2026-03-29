@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
-set GIT_SSH_COMMAND=ssh -i %USERPROFILE%\.ssh\id_ed25519 -o IdentitiesOnly=yes
+set GIT_SSH_COMMAND=ssh -i "%USERPROFILE%\.ssh\id_ed25519" -o IdentitiesOnly=yes
 
 set REPO_NAME=RICH2_EDITOR
 set REPO_URL=git@github.com:iOvermind/RICH2_EDITOR.git
@@ -44,20 +44,33 @@ goto END
 :: =============================
 :: Push 區段
 :: =============================
+
 :PUSH
 echo ----------------------------------
 echo 📦 準備上傳...
 
-rem Python requirements 處理
-if not exist "requirements.txt" if not exist ".venv" goto GIT_ADD
-echo 🐍 處理 requirements.txt...
-pip freeze > requirements.txt 2>nul
+rem 1. 先產生 requirements (如果需要)
+if exist "requirements.txt" (pip freeze > requirements.txt 2>nul)
+if not exist "requirements.txt" if exist ".venv" (pip freeze > requirements.txt 2>nul)
 
-:GIT_ADD
+rem 2. 先檢查變更，此時還沒 git add，所以 temp_git.txt 不會被追蹤
+git status --porcelain > temp_git.txt
+set FILE_SIZE=0
+for %%i in (temp_git.txt) do set FILE_SIZE=%%~zi
+
+if "%FILE_SIZE%"=="0" goto NO_CHANGES
+del temp_git.txt
+goto DO_COMMIT_LOGIC
+
+:NO_CHANGES
+echo ⚠️ 沒有變更，跳過 commit
+if exist "temp_git.txt" del temp_git.txt
+goto PUSH_CLOUD
+
+:DO_COMMIT_LOGIC
+rem 3. 確定有變更才 add
 git add .
 
-rem 檢查是否有變更
-git status --porcelain > temp_git.txt
 set FILE_SIZE=0
 for %%i in (temp_git.txt) do set FILE_SIZE=%%~zi
 
