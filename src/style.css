@@ -1,288 +1,293 @@
-import iconv from 'iconv-lite';
-
-import {
-  Buffer
-}
-
-from 'buffer';
-
-// 解決瀏覽器環境缺乏 Node.js Buffer 的問題
-if (typeof window !=='undefined') {
-  window.Buffer=window.Buffer || Buffer as any;
-}
-
-// 新增一個全域變數，用來記住 PAK 解壓出來的完整文字內容
-let pakTextLines: string[]=[];
-
+/* 1. 讓整個畫面回歸自然，外層可以出現捲軸！ */
 body {
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  margin: 0;
+  padding: 0;
   background-color: #1e1e1e;
   color: #d4d4d4;
-  margin: 20px;
+  font-family: sans-serif;
 }
 
-.container {
+/* 2. 頂部標題列：吸頂，往下捲才不會不見 */
+.top-bar {
   display: flex;
-  gap: 20px;
-}
-
-body {
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  background-color: #1e1e1e;
-  color: #d4d4d4;
-  margin: 20px;
-}
-
-.container {
-  display: flex;
-  gap: 20px;
-}
-
-.panel {
-  background-color: #2d2d2d;
-  padding: 15px;
-  border-radius: 8px;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-}
-
-/* 地圖是 36x36, 每個區塊 24x20 */
-#mapCanvas {
-  background-color: #000;
-  border: 2px solid #555;
-  cursor: crosshair;
-}
-
-.controls {
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-}
-
-button,
-input[type="file"] {
-  background-color: #0e639c;
-  color: white;
-  border: none;
-  padding: 8px 12px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-button:hover {
-  background-color: #1177bb;
-}
-
-#infoBox {
-  font-family: monospace;
-  background: #1e1e1e;
-  padding: 10px;
-  border-left: 4px solid #0e639c;
-  height: 200px;
-  overflow-y: auto;
-}
-
-/* 點擊選單 */
-#editPanel {
-  display: none;
-  background: #252526;
-  border: 1px solid #0e639c;
-  border-radius: 8px;
-  padding: 14px;
-  margin-top: 12px;
-}
-
-#editPanel h4 {
-  margin: 0 0 10px 0;
-  color: #9cdcfe;
-  font-size: 14px;
-}
-
-#editPanel label {
-  display: block;
-  font-size: 12px;
-  color: #9cdcfe;
-  margin-top: 8px;
-}
-
-#editPanel input[type="number"],
-#editPanel select {
-  width: 100%;
-  box-sizing: border-box;
-  background: #3c3c3c;
-  color: #d4d4d4;
-  border: 1px solid #555;
-  border-radius: 4px;
-  padding: 4px 6px;
-  margin-top: 2px;
-  font-size: 12px;
-}
-
-.dir-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  grid-template-rows: auto auto auto;
-  gap: 4px;
-  margin-top: 4px;
-}
-
-.dir-grid input {
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.dir-center {
-  grid-column: 2;
-  grid-row: 2;
-  display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  color: #555;
+  padding: 10px 20px;
+  background-color: #252526;
+  border-bottom: 1px solid #3c3c3c;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.top-bar h2 {
+  margin: 0;
   font-size: 18px;
 }
 
-#tilePickerWrap {
+.file-inputs {
   display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  max-height: 160px;
+  gap: 20px;
+}
+
+/* 3. 下方主要版面：讓它們自然排版 */
+.main-container {
+  display: flex;
+  padding: 10px;
+  gap: 10px;
+  align-items: flex-start;
+  /* 讓右邊不要硬跟著左邊地圖拉長 */
+}
+
+/* 4. 左側地圖：拔掉內捲軸，直接顯示完整大小 */
+.map-section {
+  flex-shrink: 0;
+  background-color: #252526;
+  border: 1px solid #3c3c3c;
+  padding: 10px;
+  border-radius: 6px;
+}
+
+canvas {
+  display: block;
+}
+
+/* 5. 右側控制台：讓它跟著畫面捲動 (Sticky) */
+.control-section {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  gap: 10px;
+  min-width: 320px;
+  max-width: 450px;
+  position: sticky;
+  top: 70px;
+  /* 避開標題列的高度 */
+  height: calc(100vh - 80px);
+  /* 鎖定高度，這樣裡面的東西才能內捲 */
+}
+
+/* 共通的面板外觀 */
+.panel-block {
+  background-color: #252526;
+  border: 1px solid #3c3c3c;
+  padding: 10px;
+  border-radius: 6px;
+}
+
+/* 右上：資訊區，大小固定 */
+.info-block {
+  flex-shrink: 0;
+}
+
+/* ★ 解決你的痛點：給 infoBox 固定最大高度跟內捲軸 ★ */
+#infoBox {
+  margin-top: 8px;
+  max-height: 150px;
   overflow-y: auto;
-  margin-top: 6px;
-  background: #1e1e1e;
-  padding: 4px;
-  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #9cdcfe;
 }
 
-.tile-btn {
-  width: 24px;
-  height: 20px;
+/* 右中：編輯區，霸佔剩下的所有空間，內容太多就內部捲動！ */
+.edit-block {
+  flex-grow: 1;
+  overflow-y: auto;
+}
+
+/* 右下：按鈕區，固定在底部不被壓縮 */
+.action-block {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.action-block button {
+  padding: 6px;
   cursor: pointer;
-  border: 2px solid transparent;
-  padding: 0;
-  image-rendering: pixelated;
 }
 
-.tile-btn.selected {
-  border-color: #e51400;
-}
+/* =========================================
+   被誤殺的內部元件 UI (頁籤、圖塊、方向鍵)
+   ========================================= */
 
-#applyBtn {
-  margin-top: 10px;
-  width: 100%;
-  background: #0e639c;
-}
-
-/* 標籤頁 */
+/* 1. 頁籤切換系統復活 */
 .tab-bar {
   display: flex;
-  gap: 2px;
-  margin-bottom: 0;
+  background: #2d2d2d;
+  border-bottom: 1px solid #0e639c;
+  border-radius: 4px 4px 0 0;
+  overflow: hidden;
 }
 
 .tab-btn {
   flex: 1;
-  padding: 5px 4px;
-  background: #3c3c3c;
-  border: 1px solid #555;
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
-  cursor: pointer;
-  color: #aaa;
-  font-size: 11px;
+  padding: 6px;
   text-align: center;
+  cursor: pointer;
+  color: #888;
+  font-size: 13px;
+  border-right: 1px solid #3c3c3c;
+  user-select: none;
+}
+
+.tab-btn:last-child {
+  border-right: none;
 }
 
 .tab-btn.active {
-  background: #252526;
-  color: #9cdcfe;
-  border-color: #0e639c;
+  background: #0e639c;
+  color: #fff;
 }
 
 .tab-pane {
   display: none;
+  /* 隱藏非作用中的頁籤內容 */
 }
 
 .tab-pane.active {
   display: block;
+  /* 顯示作用中的頁籤內容 */
 }
 
-/* 警告標籤 */
-.warn-badge {
-  background: #c55;
-  color: #fff;
-  border-radius: 3px;
-  font-size: 10px;
-  padding: 1px 4px;
-  margin-left: 4px;
+/* 2. 圖塊排版復活 (讓它變成多欄網格) */
+#tilePickerWrap {
+  display: flex;
+  flex-wrap: wrap;
+  /* 滿了就自動換行 */
+  gap: 2px;
 }
 
-/* 地點使用高亮 */
-.loc-used-cell {
-  outline: 2px solid #f0c040;
+.tile-btn {
+  cursor: pointer;
+  border: 2px solid transparent;
+  box-sizing: border-box;
 }
 
-/* 價格表 */
-#priceTable {
+.tile-btn.selected {
+  border-color: #e51400;
+  /* 選取時的紅框 */
+}
+
+/* 十字導航區專用樣式 - 修正相容性版 */
+.dir-grid input[type="number"] {
+  width: 40px !important;
+  height: 40px !important;
+  padding: 0 !important;
+  line-height: 40px;
+  font-size: 12px !important;
+  text-align: center;
+
+  /* 標準屬性放在後面 */
+  -webkit-appearance: none;
+  /* Chrome, Safari, Edge */
+  -moz-appearance: textfield;
+  /* Firefox 舊版相容 */
+  appearance: none;
+  /* 標準定義 */
+}
+
+/* 徹底殺掉 Chrome/Safari 的上下小箭頭 */
+.dir-grid input[type="number"]::-webkit-inner-spin-button,
+.dir-grid input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* 確保中間裝飾點也是正方形 */
+.dir-grid .center-dot-box {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dir-grid-container {
+  width: 124px;
+  /* (40px * 3) + gap */
+  margin: 0 auto;
+}
+
+/* 4. 價格表格順便上個保險，免得也跑版 */
+table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
-  margin-top: 6px;
+  margin-top: 5px;
+  font-size: 12px;
 }
 
-#priceTable th {
-  background: #1e1e1e;
-  color: #9cdcfe;
-  padding: 3px 5px;
-  text-align: left;
-  position: sticky;
-  top: 0;
+th,
+td {
+  border: 1px solid #555;
+  padding: 4px;
+  text-align: center;
 }
 
-#priceTable td {
-  padding: 2px 4px;
-  border-bottom: 1px solid #333;
+th {
+  background: #3c3c3c;
 }
 
-#priceTable input {
-  width: 70px;
+td input[type="number"] {
+  width: 60px;
   background: #3c3c3c;
   color: #d4d4d4;
   border: 1px solid #555;
   border-radius: 3px;
-  padding: 1px 3px;
-  font-size: 11px;
+  text-align: right;
 }
 
-.price-wrap {
-  max-height: 200px;
-  overflow-y: auto;
-  margin-top: 2px;
+/* 調整地圖容器位置，往上移一點避開左下角 */
+main.grid-canvas {
+  align-items: flex-start;
+  /* 讓地圖靠上 */
+  padding-top: 40px;
 }
 
-/* 警告列表 */
-#warnList {
-  font-size: 11px;
-  color: #f48771;
-  margin-top: 6px;
-  max-height: 120px;
-  overflow-y: auto;
+/* 統一調整 Inspector 標籤大小 */
+label {
+  font-size: 12px !important;
+  /* 稍微放大 label，不然眼睛會瞎 */
+  letter-spacing: 0.05em;
 }
 
-#warnList div {
-  padding: 2px 0;
-  border-bottom: 1px solid #3a3a3a;
-  cursor: pointer;
+/* 針對價格表內部的 input 縮小，避免影響編輯 */
+#priceTbody input {
+  font-size: 12px;
+  padding: 2px 6px;
+  height: 24px;
+  background: #0e0e0e;
+  border: 1px solid #404751;
+  width: 80px;
+  text-align: right;
 }
 
-#warnList div:hover {
-  background: #2a2a2a;
+#priceTbody td {
+  padding: 4px 8px !important;
+  font-size: 12px;
 }
 
-#warnList div {
-  padding: 2px 0;
-  border-bottom: 1px solid #3a3a3a;
-  cursor: pointer;
+/* 讓 Inspector 內部的 Input 字體也統一 */
+#editPanel input[type="number"],
+#editPanel select {
+  font-size: 14px;
+  /* 輸入框字體加大好辨識 */
 }
 
-#warnList div:hover {
-  background: #2a2a2a;
+.info-panel-clean {
+  /* 背景用深灰半透明，加上磨砂玻璃效果 */
+  background: rgba(25, 25, 25, 0.7);
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+
+  /* 這是你唯一要的：淡色細線框 (0.5px) */
+  border: 0.5px solid rgba(255, 255, 255, 0.15);
+
+  /* 關鍵：徹底拔掉陰影，不管是 CSS 還是 Tailwind 都不准有 */
+  box-shadow: none !important;
+
+  /* 確保背景不會滲出色塊 */
+  background-clip: padding-box;
 }

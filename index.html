@@ -1,165 +1,447 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-TW" class="dark">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>地圖區塊視覺化編輯器</title>
+  <title>Rich2 Editor | Map Studio</title>
+
+  <!-- 引入 Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+
+  <!-- 引入字體與圖示 -->
+  <link
+    href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono&display=swap"
+    rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+    rel="stylesheet" />
+
+  <!-- Tailwind 設定檔 (擷取自設計圖規範) -->
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "background": "#131313",
+            "surface": "#131313",
+            "surface-container-lowest": "#0e0e0e",
+            "surface-container-low": "#1b1b1c",
+            "surface-container-high": "#2a2a2a",
+            "surface-container-highest": "#353535",
+            "surface-bright": "#393939",
+            "on-background": "#e5e2e1",
+            "on-surface": "#e5e2e1",
+            "on-surface-variant": "#c0c7d3",
+            "outline-variant": "#404751",
+            "primary": "#9fcaff",
+            "primary-container": "#007acc",
+            "on-primary-container": "#ffffff",
+            "tertiary": "#66dd8b",
+            "error": "#ffb4ab",
+          },
+          fontFamily: {
+            "headline": ["Manrope", "sans-serif"],
+            "body": ["Inter", "sans-serif"],
+            "mono": ["JetBrains Mono", "monospace"]
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* 1. 基礎與字體設定 */
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      vertical-align: middle;
+    }
+
+    label {
+      font-size: 12px !important;
+      letter-spacing: 0.05em;
+    }
+
+    /* 2. 地圖佈局：地圖上移，避免被左下角擋住 */
+    main.grid-canvas {
+      background-image: radial-gradient(circle, #2a2a2a 1px, transparent 1px);
+      background-size: 32px 32px;
+      align-items: flex-start;
+      padding-top: 40px;
+    }
+
+    /* 3. 左下角面板：只有細線框，絕對沒有外層大黑影 */
+    .info-panel-clean {
+      background: rgba(25, 25, 25, 0.75);
+      backdrop-filter: blur(15px);
+      -webkit-backdrop-filter: blur(15px);
+
+      /* 這是你要的淡色細線框 */
+      border: 0.5px solid rgba(255, 255, 255, 0.15) !important;
+
+      /* 關鍵：徹底拔掉陰影，防止出現你說的「外層大黑框」 */
+      box-shadow: none !important;
+      background-clip: padding-box;
+    }
+
+    /* 4. 右側 Inspector 控制 */
+    .tab-pane {
+      display: none;
+    }
+
+    .tab-pane.active {
+      display: block;
+    }
+
+    /* 價格頁籤：縮小字體避免撐破欄位 */
+    #priceTbody input {
+      font-size: 12px;
+      padding: 2px 6px;
+      height: 24px;
+      background: #0e0e0e;
+      border: 1px solid rgba(64, 71, 81, 0.5);
+      width: 80px;
+      text-align: right;
+    }
+
+    #priceTbody td {
+      padding: 4px 8px !important;
+      font-size: 12px;
+    }
+
+    /* 5. 十字導航區 (Directional Segment) 尺寸鎖死 */
+    .dir-grid-container {
+      width: 124px;
+      margin: 0 auto;
+    }
+
+    .dir-grid input[type="number"] {
+      width: 40px !important;
+      height: 40px !important;
+      padding: 0 !important;
+      line-height: 40px;
+      font-size: 13px !important;
+      text-align: center;
+      -webkit-appearance: none;
+      -moz-appearance: textfield;
+      appearance: none;
+    }
+
+    .dir-grid .center-dot-box {
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* 6. 通用輸入框處理 */
+    input[type="file"] {
+      display: none;
+    }
+
+    input[type="number"]::-webkit-inner-spin-button,
+    input[type="number"]::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    input[type="number"] {
+      -moz-appearance: textfield;
+      appearance: none;
+    }
+  </style>
 
 </head>
 
-<body>
+<body class="bg-background text-on-background font-body select-none overflow-hidden h-screen flex flex-col">
 
-  <h2>地圖區塊視覺化編輯器 (PART?.PAK)</h2>
-
-  <div class="container">
-    <div class="panel">
-      <!-- Canvas 大小: 36*24 = 864, 36*20 = 720 -->
-      <canvas id="mapCanvas" width="864" height="720"></canvas>
+  <!-- TopNavBar (頂部標題與載入列) -->
+  <header
+    class="bg-[#131313] flex justify-between items-center w-full px-6 h-14 border-b border-outline-variant/15 z-50 shrink-0">
+    <div class="flex items-center gap-8">
+      <span class="text-xl font-bold text-[#e5e2e1] font-headline tracking-tight">Rich2 Editor</span>
     </div>
 
-    <div class="panel controls">
-      <div>
-        <label>1. 載入 PART?.PAK (地圖圖庫與屬性):</label><br>
+    <div class="flex items-center gap-3">
+      <!-- 將原本的 input file 綁定到設計圖的按鈕樣式上 -->
+      <label
+        class="cursor-pointer px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-on-surface hover:bg-[#2a2a2a] transition-all rounded">
+        LOAD PAK
         <input type="file" id="mapFile" accept=".PAK">
-      </div>
-      <div>
-        <label>2. 載入 SAVE_?.DSK (存檔地圖排版):</label><br>
+      </label>
+      <label
+        class="cursor-pointer px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-on-surface hover:bg-[#2a2a2a] transition-all rounded">
+        LOAD DSK
         <input type="file" id="saveFile" accept=".DSK">
+      </label>
+    </div>
+  </header>
+
+  <div class="flex-1 flex overflow-hidden">
+
+    <!-- Main Canvas Area (左側獨立區塊：地圖) -->
+    <main class="relative flex-1 bg-surface overflow-hidden grid-canvas flex items-center justify-center p-8">
+
+      <!-- 地圖容器 -->
+      <div
+        class="relative w-[864px] h-[720px] bg-surface-container-lowest rounded-lg overflow-hidden border border-outline-variant/20">
+
+        <!-- 實際運作的 Canvas (保留原 ID) -->
+        <canvas id="mapCanvas" width="864" height="720" class="absolute inset-0 z-10"></canvas>
       </div>
 
-      <hr style="border-color: #555; width: 100%;">
-
-      <h3>目前選取區塊</h3>
-      <div id="infoBox">
-        等待點擊...
-      </div>
-
-      <div id="editPanel">
-        <h4 id="editTitle" style="margin:0 0 6px 0;color:#9cdcfe;font-size:13px;">請點選地圖格子</h4>
-
-        <div class="tab-bar">
-          <div class="tab-btn active" data-tab="tabTile">圖塊</div>
-          <div class="tab-btn" data-tab="tabLoc">地點</div>
-          <div class="tab-btn" data-tab="tabPrice">價格</div>
-          <div class="tab-btn" data-tab="tabWarn">⚠ 警告</div>
+      <!-- 確保 class 只有 info-panel-clean，不要有任何 shadow-xxx 或是 border-xxx 的 Tailwind 類別 -->
+      <div class="absolute bottom-8 left-8 info-panel-clean px-5 py-4 rounded-lg z-20 min-w-[200px]">
+        <div id="infoBox" class="text-on-surface font-mono text-[13px] leading-relaxed space-y-1">
+          等待點擊...
         </div>
+      </div>
+    </main>
+
+    <!-- Right SideNavBar (右側獨立區塊：控制台) -->
+    <aside
+      class="w-128 min-w-[36rem] max-w-[36rem] flex-none bg-surface-container-low flex flex-col border-l border-outline-variant/15 z-40">
+
+      <!-- Header -->
+      <div class="px-5 py-4 flex flex-col gap-1">
+        <h2 class="font-headline text-lg font-bold text-on-background tracking-tight">Inspector</h2>
+        <p id="editTitle" class="text-[10px] font-medium uppercase tracking-[0.2em] text-on-surface-variant/70">請點選地圖格子
+        </p>
+      </div>
+
+      <!-- Tabs (保留原 data-tab 屬性) -->
+      <div class="flex border-b border-outline-variant/10 tab-bar">
+        <button
+          class="tab-btn flex-1 py-3 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant hover:bg-surface-container-high transition-colors"
+          data-tab="tabTile">Tiles</button>
+        <button
+          class="tab-btn active flex-1 py-3 text-[10px] font-bold uppercase tracking-wider border-b-2 border-primary text-primary bg-surface-container-high"
+          data-tab="tabLoc">Locations</button>
+        <button
+          class="tab-btn flex-1 py-3 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant hover:bg-surface-container-high transition-colors"
+          data-tab="tabPrice">Prices</button>
+        <button
+          class="tab-btn flex-1 py-3 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant hover:bg-surface-container-high transition-colors flex items-center justify-center gap-1"
+          data-tab="tabWarn">
+          Warn
+          <span class="material-symbols-outlined text-[14px] text-error"
+            style="font-variation-settings: 'FILL' 1;">warning</span>
+        </button>
+      </div>
+
+      <!-- Scrollable Content Area -->
+      <div class="flex-1 overflow-y-auto overflow-x-hidden p-5 flex flex-col gap-6" id="editPanel">
 
         <!-- 圖塊頁 -->
-        <div id="tabTile" class="tab-pane active"
-          style="border:1px solid #0e639c;padding:6px;border-radius:0 4px 4px 4px;">
-          <div style="font-size:11px;color:#888;margin-bottom:4px;">點選圖塊立即生效</div>
-          <div id="tilePickerWrap"></div>
+        <div id="tabTile" class="tab-pane">
+          <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider mb-3">點選圖塊立即生效</div>
+          <div id="tilePickerWrap" class="flex flex-wrap gap-1"></div>
         </div>
 
-        <!-- 地點頁 -->
-        <div id="tabLoc" class="tab-pane" style="border:1px solid #0e639c;padding:8px;border-radius:0 4px 4px 4px;">
-          <label>地點編號 (loc ID):</label>
-          <input type="number" id="editLocId" min="0" max="282"
-            style="width:100%;box-sizing:border-box;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;margin-top:2px;">
+        <!-- 地點頁 (預設顯示) -->
+        <div id="tabLoc" class="tab-pane active space-y-5">
 
-          <label style="margin-top:8px;display:block;">特殊地點代號 (0=土地/公園):</label>
-          <div style="display:flex;gap:6px;align-items:center;margin-top:2px;">
-            <input type="number" id="editSpecial" min="0" max="10"
-              style="width:50px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
-            <span id="specialNameDisplay" style="color:#ce9178;font-size:12px;"></span>
+          <!-- Loc ID -->
+          <div class="space-y-1.5">
+            <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">Loc ID</label>
+            <input type="number" id="editLocId" min="0" max="282"
+              class="w-full bg-surface-container-lowest border-none focus:ring-0 focus:border-b-2 focus:border-primary text-sm font-mono p-2 text-primary rounded-sm outline-none transition-all">
           </div>
 
-          <label style="margin-top:8px;display:block;">地段編號 (0=非土地):</label>
-          <div style="display:flex;gap:6px;align-items:center;margin-top:2px;">
-            <input type="number" id="editSegId" min="0" max="99"
-              style="width:50px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
-            <span id="segNameDisplay" style="color:#4ec9b0;font-size:12px;"></span>
-            <button id="addSegBtn" title="新增地段"
-              style="padding:2px 7px;font-size:12px;background:#2d7a2d;border:none;border-radius:3px;color:#fff;cursor:pointer;">＋</button>
+          <!-- Special ID -->
+          <div class="space-y-1.5">
+            <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">Special ID
+              (0=土地)</label>
+            <div class="flex gap-2">
+              <input type="number" id="editSpecial" min="0" max="10"
+                class="w-16 bg-surface-container-lowest border-none text-sm font-mono p-2 text-on-surface rounded-sm outline-none focus:ring-1 focus:ring-primary">
+              <div id="specialNameDisplay"
+                class="flex-1 bg-surface-container-lowest border-none p-2 text-xs text-on-surface-variant flex items-center italic rounded-sm overflow-hidden text-ellipsis whitespace-nowrap">
+              </div>
+            </div>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
-            <label style="margin:0;">UNK9:</label>
-            <input type="number" id="editUnk9" min="0" max="65535"
-              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
-            <label style="margin:0;">UNKA:</label>
-            <input type="number" id="editUnkA" min="0" max="65535"
-              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
-            <label style="margin:0;">UNKB:</label>
-            <input type="number" id="editUnkB" min="0" max="65535"
-              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+
+          <!-- Seg ID (原本有的功能，融入新設計) -->
+          <div class="space-y-1.5">
+            <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">Segment ID
+              (0=非土地)</label>
+            <div class="flex gap-2">
+              <input type="number" id="editSegId" min="0" max="99"
+                class="w-16 bg-surface-container-lowest border-none text-sm font-mono p-2 text-on-surface rounded-sm outline-none focus:ring-1 focus:ring-primary">
+              <div id="segNameDisplay"
+                class="flex-1 bg-surface-container-lowest border-none p-2 text-xs text-tertiary flex items-center rounded-sm">
+              </div>
+              <button id="addSegBtn" title="新增地段"
+                class="w-8 flex items-center justify-center bg-surface-container-highest hover:bg-surface-bright text-on-surface rounded transition-colors">
+                <span class="material-symbols-outlined text-[16px]">add</span>
+              </button>
+            </div>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
-            <label style="margin:0;">UNK3方向:</label>
+
+          <!-- UNK 9, A, B -->
+          <div class="grid grid-cols-3 gap-2">
+            <div class="space-y-1.5">
+              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">UNK 9</label>
+              <input type="number" id="editUnk9" min="0" max="65535"
+                class="w-full bg-surface-container-lowest border-none text-sm font-mono p-2 text-on-surface rounded-sm outline-none focus:ring-1 focus:ring-primary">
+            </div>
+            <div class="space-y-1.5">
+              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">UNK A</label>
+              <input type="number" id="editUnkA" min="0" max="65535"
+                class="w-full bg-surface-container-lowest border-none text-sm font-mono p-2 text-on-surface rounded-sm outline-none focus:ring-1 focus:ring-primary">
+            </div>
+            <div class="space-y-1.5">
+              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">UNK B</label>
+              <input type="number" id="editUnkB" min="0" max="65535"
+                class="w-full bg-surface-container-lowest border-none text-sm font-mono p-2 text-on-surface rounded-sm outline-none focus:ring-1 focus:ring-primary">
+            </div>
+          </div>
+
+          <!-- UNK 3 (原本有的功能) -->
+          <div class="space-y-1.5">
+            <div class="flex justify-between items-center">
+              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">UNK 3 方向</label>
+              <span id="unk3Hint" class="text-[10px] text-tertiary">建議方向：-</span>
+            </div>
             <select id="editUnk3"
-              style="background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+              class="w-full bg-surface-container-lowest border-none text-sm p-2 text-on-surface rounded-sm outline-none focus:ring-1 focus:ring-primary appearance-none">
               <option value="0">0 無/不指定</option>
               <option value="1">1 左</option>
               <option value="2">2 上</option>
               <option value="3">3 右</option>
               <option value="4">4 下</option>
             </select>
-            <span id="unk3Hint" style="font-size:11px;color:#ce9178;">建議方向：-</span>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
-            <label style="margin:0;">UNK9:</label>
-            <input type="number" id="editUnk9" min="0" max="65535"
-              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
-            <label style="margin:0;">UNKA:</label>
-            <input type="number" id="editUnkA" min="0" max="65535"
-              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
-            <label style="margin:0;">UNKB:</label>
-            <input type="number" id="editUnkB" min="0" max="65535"
-              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+
+          <!-- Directional Nav Pad (重新設計的十字鍵) -->
+          <!-- Directional Nav Pad (統一尺寸版本) -->
+          <div class="pt-4 space-y-2 border-t border-outline-variant/10">
+            <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider block text-center">
+              Directional Segment (Next Loc)
+            </label>
+
+            <div class="dir-grid-container">
+              <div class="grid grid-cols-3 gap-1 dir-grid">
+                <!-- 第一列 -->
+                <div></div>
+                <input type="number" id="editDirUp" min="0" max="282" placeholder="上"
+                  class="bg-surface-container-lowest text-on-surface rounded-sm outline-none focus:ring-1 focus:ring-primary transition-colors">
+                <div></div>
+
+                <!-- 第二列 -->
+                <input type="number" id="editDirLeft" min="0" max="282" placeholder="左"
+                  class="bg-surface-container-lowest text-on-surface rounded-sm outline-none focus:ring-1 focus:ring-primary transition-colors">
+
+                <div class="center-dot-box bg-primary/10 border border-primary/30 rounded-sm">
+                  <div class="w-1.5 h-1.5 bg-primary rounded-full"></div>
+                </div>
+
+                <input type="number" id="editDirRight" min="0" max="282" placeholder="右"
+                  class="bg-surface-container-lowest text-on-surface rounded-sm outline-none focus:ring-1 focus:ring-primary transition-colors">
+
+                <!-- 第三列 -->
+                <div></div>
+                <input type="number" id="editDirDown" min="0" max="282" placeholder="下"
+                  class="bg-surface-container-lowest text-on-surface rounded-sm outline-none focus:ring-1 focus:ring-primary transition-colors">
+                <div></div>
+              </div>
+            </div>
+
+            <div id="dirWarnMsg" class="text-[10px] text-error text-center mt-2 min-h-[14px]"></div>
           </div>
-          <label style="margin-top:8px;display:block;">可行進方向（下個地點編號，0=不通）:</label>
-          <div class="dir-grid" style="margin-top:4px;">
-            <div></div>
-            <div><input type="number" id="editDirUp" min="0" max="282" placeholder="上"
-                style="width:100%;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px;text-align:center;">
-            </div>
-            <div></div>
-            <div><input type="number" id="editDirLeft" min="0" max="282" placeholder="左"
-                style="width:100%;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px;text-align:center;">
-            </div>
-            <div class="dir-center">✦</div>
-            <div><input type="number" id="editDirRight" min="0" max="282" placeholder="右"
-                style="width:100%;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px;text-align:center;">
-            </div>
-            <div></div>
-            <div><input type="number" id="editDirDown" min="0" max="282" placeholder="下"
-                style="width:100%;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px;text-align:center;">
-            </div>
-            <div></div>
-          </div>
-          <div id="dirWarnMsg" style="font-size:11px;color:#f48771;margin-top:4px;min-height:14px;"></div>
         </div>
 
         <!-- 價格頁 -->
-        <div id="tabPrice" class="tab-pane" style="border:1px solid #0e639c;padding:8px;border-radius:0 4px 4px 4px;">
-          <div style="font-size:11px;color:#888;margin-bottom:4px;">目前地段：<span id="priceSegLabel"
-              style="color:#4ec9b0;">-</span></div>
-          <div class="price-wrap">
-            <table id="priceTable">
-              <thead>
+        <div id="tabPrice" class="tab-pane space-y-4">
+          <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">
+            目前地段：<span id="priceSegLabel" class="text-tertiary ml-1">-</span>
+          </div>
+          <div class="bg-surface-container-lowest rounded-md overflow-hidden border border-outline-variant/10">
+            <table id="priceTable" class="w-full text-left text-xs">
+              <thead class="bg-surface-container-high text-on-surface-variant">
                 <tr>
-                  <th>欄位</th>
-                  <th>數值</th>
+                  <th class="px-3 py-2 font-medium">欄位</th>
+                  <th class="px-3 py-2 font-medium text-right">數值</th>
                 </tr>
               </thead>
-              <tbody id="priceTbody"></tbody>
+              <tbody id="priceTbody" class="divide-y divide-outline-variant/10">
+                <!-- JS 動態產生 -->
+              </tbody>
             </table>
           </div>
         </div>
 
         <!-- 警告頁 -->
-        <div id="tabWarn" class="tab-pane" style="border:1px solid #0e639c;padding:8px;border-radius:0 4px 4px 4px;">
-          <div style="font-size:11px;color:#888;">點擊警告可跳至該格子</div>
-          <div id="warnList"></div>
+        <div id="tabWarn" class="tab-pane space-y-3">
+          <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">點擊警告可跳至該格子</div>
+          <div id="warnList" class="space-y-2 text-xs"></div>
         </div>
+
       </div>
 
-      <button id="exportDskBtn">匯出 SAVE_?.DSK</button>
-      <button id="exportPakBtn">匯出 PART?.PAK</button>
-      <button id="syncMarkerBtn" title="依 owner/house 自動同步 loc+950 的標記圖塊">自動連結購地圖塊</button>
-    </div>
+      <!-- Sidebar Actions (右下：匯出按鈕區) -->
+      <div
+        class="p-4 bg-surface-container-high border-t border-outline-variant/15 flex flex-col gap-2 action-block shrink-0">
+        <button id="syncMarkerBtn"
+          class="w-full py-2 bg-surface-container-highest hover:bg-surface-bright text-xs font-bold uppercase tracking-widest text-on-surface rounded transition-all flex items-center justify-center gap-2">
+          <span class="material-symbols-outlined text-sm">sync</span>
+          Sync Marker
+        </button>
+        <div class="flex gap-2">
+          <button id="exportDskBtn"
+            class="flex-1 py-2 border border-outline-variant/20 hover:bg-surface-container-highest text-[10px] font-bold uppercase tracking-widest text-on-surface-variant rounded transition-all">Export
+            DSK</button>
+          <button id="exportPakBtn"
+            class="flex-1 py-2 border border-outline-variant/20 hover:bg-surface-container-highest text-[10px] font-bold uppercase tracking-widest text-on-surface-variant rounded transition-all">Export
+            PAK</button>
+        </div>
+      </div>
+    </aside>
   </div>
+
+  <!-- Log Console (底部狀態列) -->
+  <footer
+    class="h-8 bg-[#131313] border-t border-outline-variant/15 flex items-center px-4 gap-6 font-mono text-[10px] shrink-0">
+    <div class="flex gap-2 items-center text-tertiary">
+      <span class="material-symbols-outlined text-xs">terminal</span>
+      <span>> Editor initialized successfully</span>
+    </div>
+    <div class="ml-auto flex items-center gap-4 text-on-surface-variant/50">
+      <span>UTF-8</span>
+      <span>CANVAS: 864x720</span>
+      <span class="text-primary font-bold">READY</span>
+    </div>
+  </footer>
+
+  <!-- 確保原本的 JS 能夠載入 -->
   <script type="module" src="/src/main.ts"></script>
+
+  <!-- 簡易的頁籤切換邏輯 (如果原本的 JS 沒有處理 UI 切換的話) -->
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const tabBtns = document.querySelectorAll('.tab-btn');
+      const tabPanes = document.querySelectorAll('.tab-pane');
+
+      tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          // 移除所有 active
+          tabBtns.forEach(b => {
+            b.classList.remove('active', 'border-b-2', 'border-primary', 'text-primary', 'bg-surface-container-high');
+            b.classList.add('text-on-surface-variant');
+          });
+          tabPanes.forEach(p => p.classList.remove('active'));
+
+          // 設定當前 active
+          btn.classList.add('active', 'border-b-2', 'border-primary', 'text-primary', 'bg-surface-container-high');
+          btn.classList.remove('text-on-surface-variant');
+
+          const targetId = btn.getAttribute('data-tab');
+          document.getElementById(targetId).classList.add('active');
+        });
+      });
+    });
+  </script>
 </body>
 
 </html>
