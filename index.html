@@ -73,7 +73,40 @@
             <button id="addSegBtn" title="新增地段"
               style="padding:2px 7px;font-size:12px;background:#2d7a2d;border:none;border-radius:3px;color:#fff;cursor:pointer;">＋</button>
           </div>
-
+          <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+            <label style="margin:0;">UNK9:</label>
+            <input type="number" id="editUnk9" min="0" max="65535"
+              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+            <label style="margin:0;">UNKA:</label>
+            <input type="number" id="editUnkA" min="0" max="65535"
+              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+            <label style="margin:0;">UNKB:</label>
+            <input type="number" id="editUnkB" min="0" max="65535"
+              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+            <label style="margin:0;">UNK3方向:</label>
+            <select id="editUnk3"
+              style="background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+              <option value="0">0 無/不指定</option>
+              <option value="1">1 左</option>
+              <option value="2">2 上</option>
+              <option value="3">3 右</option>
+              <option value="4">4 下</option>
+            </select>
+            <span id="unk3Hint" style="font-size:11px;color:#ce9178;">建議方向：-</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+            <label style="margin:0;">UNK9:</label>
+            <input type="number" id="editUnk9" min="0" max="65535"
+              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+            <label style="margin:0;">UNKA:</label>
+            <input type="number" id="editUnkA" min="0" max="65535"
+              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+            <label style="margin:0;">UNKB:</label>
+            <input type="number" id="editUnkB" min="0" max="65535"
+              style="width:56px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:4px 6px;">
+          </div>
           <label style="margin-top:8px;display:block;">可行進方向（下個地點編號，0=不通）:</label>
           <div class="dir-grid" style="margin-top:4px;">
             <div></div>
@@ -123,6 +156,7 @@
 
       <button id="exportDskBtn">匯出 SAVE_?.DSK</button>
       <button id="exportPakBtn">匯出 PART?.PAK</button>
+      <button id="syncMarkerBtn" title="依 owner/house 自動同步 loc+950 的標記圖塊">自動連結購地圖塊</button>
     </div>
   </div>
   <script type="module" src="/src/main.ts"></script>

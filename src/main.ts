@@ -408,6 +408,8 @@ function parseSaveDsk(dataView: DataView): void {
       mapLayout[i] = layoutDataView.getUint16(i * 2, true);
     }
     isSaveLoaded = true;
+    (window as any)._locDataView = locDataView;  // ← 加這行
+
     logMsg("存檔地圖排版載入成功！");
 
     if (rawPakBuffer && pakGroupPointers.length >= 3) {
@@ -468,6 +470,8 @@ function parseSaveDsk(dataView: DataView): void {
   }
 }
 
+(window as any)._rawDskBuffer = rawDskBuffer;
+
 function checkAndRenderRealMap(): void {
   if (isPaletteLoaded && mapTilesData.length > 0 && isSaveLoaded) {
     logMsg("幹，三神器湊齊了！開始渲染真正的地圖...");
@@ -525,6 +529,73 @@ function getSegName(segId: number): string {
   return extraSegNames[segId] || `地段${segId}`;
 }
 
+function calcSegmentOrder(segId: number, locId: number): number {
+  if (!locDataView || segId <= 0 || locId <= 0) return 0;
+  let order = 1;
+  for (let i = 1; i < LOC_COUNT; i++) {
+    if (i === locId) continue;
+    if (getLocField(LOC_FIELDS.SEGMENT, i) === segId) order++;
+  }
+  return order;
+}
+
+function inferSegmentSharedField(segId: number, field: number, fallback: number): number {
+  if (!locDataView || segId <= 0) return fallback;
+  const counter = new Map<number, number>();
+  for (let i = 1; i < LOC_COUNT; i++) {
+    if (getLocField(LOC_FIELDS.SEGMENT, i) !== segId) continue;
+    const v = getLocField(field, i);
+    counter.set(v, (counter.get(v) || 0) + 1);
+  }
+  if (counter.size === 0) return fallback;
+  return [...counter.entries()].sort((a, b) => b[1] - a[1])[0][0];
+}
+
+function detectMarkerDir(baseLocId: number): number {
+  const marker = baseLocId + 950;
+  let baseIdx = -1;
+  let markerIdx = -1;
+  for (let i = 0; i < mapGrid.length; i++) {
+    if (mapGrid[i] === baseLocId) baseIdx = i;
+    if (mapGrid[i] === marker) markerIdx = i;
+  }
+  if (baseIdx < 0 || markerIdx < 0) return 0;
+  const bx = baseIdx % GRID_COLS, by = Math.floor(baseIdx / GRID_COLS);
+  const mx = markerIdx % GRID_COLS, my = Math.floor(markerIdx / GRID_COLS);
+  if (mx < bx && my === by) return 1;
+  if (my < by && mx === bx) return 2;
+  if (mx > bx && my === by) return 3;
+  if (my > by && mx === bx) return 4;
+  return 0;
+}
+
+function dirLabel(dir: number): string {
+  return dir === 1 ? '左' : dir === 2 ? '上' : dir === 3 ? '右' : dir === 4 ? '下' : '無';
+}
+
+function applyFieldToSegment(segId: number, field: number, val: number): void {
+  if (!locDataView || segId <= 0) return;
+  for (let i = 1; i < LOC_COUNT; i++) {
+    if (getLocField(LOC_FIELDS.SEGMENT, i) === segId) setLocField(field, i, val);
+  }
+}
+
+function applySegmentDerivedFields(locId: number, segId: number): void {
+  if (!locDataView || locId <= 0 || segId <= 0) return;
+  setLocField(LOC_FIELDS.SEGMENT, locId, segId);
+  setLocField(LOC_FIELDS.UNK9, locId, calcSegmentOrder(segId, locId));
+
+  const unkaInput = document.getElementById('editUnkA') as HTMLInputElement | null;
+  const unkbInput = document.getElementById('editUnkB') as HTMLInputElement | null;
+  const unka = (unkaInput && unkaInput.value !== '') ? (parseInt(unkaInput.value) || 0) : inferSegmentSharedField(segId, LOC_FIELDS.UNKA, 1);
+  const unkb = (unkbInput && unkbInput.value !== '') ? (parseInt(unkbInput.value) || 0) : inferSegmentSharedField(segId, LOC_FIELDS.UNKB, 1);
+  setLocField(LOC_FIELDS.UNKA, locId, unka);
+  setLocField(LOC_FIELDS.UNKB, locId, unkb);
+
+  const dir = detectMarkerDir(locId);
+  if (dir > 0) setLocField(LOC_FIELDS.UNK3, locId, dir);
+}
+
 function getSpecialName(spId: number): string {
   // 改成 >= 0，把 ID 0 給放行！
   return (spId >= 0 && spId < SPECIAL_NAMES.length) ? SPECIAL_NAMES[spId] : '';
@@ -577,7 +648,13 @@ const extraPriceData: Record<number, Record<number, number>> = {};
     (document.getElementById('editSegId') as HTMLInputElement).value = newSegId.toString();
     (document.getElementById('segNameDisplay') as HTMLSpanElement).textContent = name;
     if (locId > 0 && locData) {
-      setLocField(LOC_FIELDS.SEGMENT, locId, newSegId);
+      applySegmentDerivedFields(locId, newSegId);
+      (document.getElementById('editUnk9') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNK9, locId).toString();
+      (document.getElementById('editUnkA') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNKA, locId).toString();
+      (document.getElementById('editUnkB') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNKB, locId).toString();
+      (document.getElementById('editUnk3') as HTMLSelectElement).value = getLocField(LOC_FIELDS.UNK3, locId).toString();
+      const suggest = detectMarkerDir(locId);
+      (document.getElementById('unk3Hint') as HTMLSpanElement).textContent = `建議方向：${dirLabel(suggest)} (${suggest})`;
       renderPriceTable(newSegId);
     }
   }
@@ -805,17 +882,25 @@ function openEditPanel(gridX: number, gridY: number): void {
     (document.getElementById('segNameDisplay') as HTMLSpanElement).textContent = getSegName(segId);
     (document.getElementById('editSpecial') as HTMLInputElement).value = spId.toString();
     (document.getElementById('specialNameDisplay') as HTMLSpanElement).textContent = getSpecialName(spId);
+    (document.getElementById('editUnk9') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNK9, locId).toString();
+    (document.getElementById('editUnkA') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNKA, locId).toString();
+    (document.getElementById('editUnkB') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNKB, locId).toString();
+    const unk3 = getLocField(LOC_FIELDS.UNK3, locId);
+    (document.getElementById('editUnk3') as HTMLSelectElement).value = unk3.toString();
+    const suggest = detectMarkerDir(locId);
+    (document.getElementById('unk3Hint') as HTMLSpanElement).textContent = `建議方向：${dirLabel(suggest)} (${suggest})`;
     (document.getElementById('editDirLeft') as HTMLInputElement).value = getLocField(LOC_FIELDS.LEFT, locId).toString();
     (document.getElementById('editDirUp') as HTMLInputElement).value = getLocField(LOC_FIELDS.UP, locId).toString();
     (document.getElementById('editDirRight') as HTMLInputElement).value = getLocField(LOC_FIELDS.RIGHT, locId).toString();
     (document.getElementById('editDirDown') as HTMLInputElement).value = getLocField(LOC_FIELDS.DOWN, locId).toString();
     renderPriceTable(segId);
   } else {
-    ['editSegId', 'editSpecial', 'editDirLeft', 'editDirUp', 'editDirRight', 'editDirDown'].forEach(id => {
+    ['editSegId', 'editSpecial', 'editUnk9', 'editUnkA', 'editUnkB', 'editUnk3', 'editDirLeft', 'editDirUp', 'editDirRight', 'editDirDown'].forEach(id => {
       (document.getElementById(id) as HTMLInputElement).value = '0';
     });
     (document.getElementById('segNameDisplay') as HTMLSpanElement).textContent = '';
     (document.getElementById('specialNameDisplay') as HTMLSpanElement).textContent = '';
+    (document.getElementById('unk3Hint') as HTMLSpanElement).textContent = '建議方向：-';
     renderPriceTable(0);
   }
   validateDirWarnings(locId, gridX, gridY);
@@ -844,20 +929,29 @@ function setLocWithCoords(locId: number, gridX: number, gridY: number): void {
   if (newLocId > 0 && locData) {
     const segId = getLocField(LOC_FIELDS.SEGMENT, newLocId);  // ← locId → newLocId
     const spId = getLocField(LOC_FIELDS.SPECIAL, newLocId);   // ← locId → newLocId
+    if (segId > 0) applySegmentDerivedFields(newLocId, segId);
     (document.getElementById('editSegId') as HTMLInputElement).value = segId.toString();
     (document.getElementById('segNameDisplay') as HTMLSpanElement).textContent = getSegName(segId);
     (document.getElementById('editSpecial') as HTMLInputElement).value = spId.toString();
     (document.getElementById('specialNameDisplay') as HTMLSpanElement).textContent = getSpecialName(spId);
+    (document.getElementById('editUnk9') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNK9, newLocId).toString();
+    (document.getElementById('editUnkA') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNKA, newLocId).toString();
+    (document.getElementById('editUnkB') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNKB, newLocId).toString();
+    const unk3 = getLocField(LOC_FIELDS.UNK3, newLocId);
+    (document.getElementById('editUnk3') as HTMLSelectElement).value = unk3.toString();
+    const suggest = detectMarkerDir(newLocId);
+    (document.getElementById('unk3Hint') as HTMLSpanElement).textContent = `建議方向：${dirLabel(suggest)} (${suggest})`;
     (document.getElementById('editDirLeft') as HTMLInputElement).value = getLocField(LOC_FIELDS.LEFT, newLocId).toString();   // ← locId → newLocId
     (document.getElementById('editDirUp') as HTMLInputElement).value = getLocField(LOC_FIELDS.UP, newLocId).toString();       // ← locId → newLocId
     (document.getElementById('editDirRight') as HTMLInputElement).value = getLocField(LOC_FIELDS.RIGHT, newLocId).toString(); // ← locId → newLocId
     (document.getElementById('editDirDown') as HTMLInputElement).value = getLocField(LOC_FIELDS.DOWN, newLocId).toString();   // ← locId → newLocId
   } else {
-    ['editSegId', 'editSpecial', 'editDirLeft', 'editDirUp', 'editDirRight', 'editDirDown'].forEach(id => {
+    ['editSegId', 'editSpecial', 'editUnk9', 'editUnkA', 'editUnkB', 'editUnk3', 'editDirLeft', 'editDirUp', 'editDirRight', 'editDirDown'].forEach(id => {
       (document.getElementById(id) as HTMLInputElement).value = '0';
     });
     (document.getElementById('segNameDisplay') as HTMLSpanElement).textContent = '';
     (document.getElementById('specialNameDisplay') as HTMLSpanElement).textContent = '';
+    (document.getElementById('unk3Hint') as HTMLSpanElement).textContent = '建議方向：-';
   }
 
   const segForPrice = newLocId > 0 ? getLocField(LOC_FIELDS.SEGMENT, newLocId) : 0;  // ← locId → newLocId
@@ -872,7 +966,57 @@ function setLocWithCoords(locId: number, gridX: number, gridY: number): void {
   const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
   const segId = parseInt(target.value) || 0;
   (document.getElementById('segNameDisplay') as HTMLSpanElement).textContent = getSegName(segId);
-  if (locId > 0) { setLocField(LOC_FIELDS.SEGMENT, locId, segId); renderPriceTable(segId); }
+  if (locId > 0) {
+    if (segId > 0) {
+      applySegmentDerivedFields(locId, segId);
+      (document.getElementById('editUnk9') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNK9, locId).toString();
+      (document.getElementById('editUnkA') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNKA, locId).toString();
+      (document.getElementById('editUnkB') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNKB, locId).toString();
+      (document.getElementById('editUnk3') as HTMLSelectElement).value = getLocField(LOC_FIELDS.UNK3, locId).toString();
+      const suggest = detectMarkerDir(locId);
+      (document.getElementById('unk3Hint') as HTMLSpanElement).textContent = `建議方向：${dirLabel(suggest)} (${suggest})`;
+    } else {
+      setLocField(LOC_FIELDS.SEGMENT, locId, 0);
+    }
+    renderPriceTable(segId);
+  }
+});
+
+(document.getElementById('editUnk9') as HTMLInputElement).addEventListener('input', function (e: Event) {
+  if (selectedGridX < 0) return;
+  const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
+  if (locId > 0) setLocField(LOC_FIELDS.UNK9, locId, parseInt((e.target as HTMLInputElement).value) || 0);
+});
+
+(document.getElementById('editUnkA') as HTMLInputElement).addEventListener('input', function (e: Event) {
+  if (selectedGridX < 0) return;
+  const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
+  if (locId > 0) {
+    const segId = getLocField(LOC_FIELDS.SEGMENT, locId);
+    const v = parseInt((e.target as HTMLInputElement).value) || 0;
+    if (segId > 0) applyFieldToSegment(segId, LOC_FIELDS.UNKA, v);
+    else setLocField(LOC_FIELDS.UNKA, locId, v);
+  }
+});
+
+(document.getElementById('editUnkB') as HTMLInputElement).addEventListener('input', function (e: Event) {
+  if (selectedGridX < 0) return;
+  const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
+  if (locId > 0) {
+    const segId = getLocField(LOC_FIELDS.SEGMENT, locId);
+    const v = parseInt((e.target as HTMLInputElement).value) || 0;
+    if (segId > 0) applyFieldToSegment(segId, LOC_FIELDS.UNKB, v);
+    else setLocField(LOC_FIELDS.UNKB, locId, v);
+  }
+});
+
+(document.getElementById('editUnk3') as HTMLSelectElement).addEventListener('change', function (e: Event) {
+  if (selectedGridX < 0) return;
+  const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
+  if (locId > 0) {
+    const v = parseInt((e.target as HTMLSelectElement).value) || 0;
+    setLocField(LOC_FIELDS.UNK3, locId, v);
+  }
 });
 
 function dirInputHandler(fieldConst: number) {
@@ -1015,51 +1159,174 @@ function downloadBuffer(buffer: ArrayBuffer, filename: string): void {
 
 (document.getElementById('exportDskBtn') as HTMLButtonElement).addEventListener('click', function () {
   if (!isSaveLoaded) { logMsg("還沒載入 DSK！"); return; }
+  const syncFn = (window as any).syncMarkerTilesFromOwnership;
+  if (typeof syncFn === 'function') {
+    const touched = syncFn(1, 2);
+    logMsg(`匯出前自動同步購地標記圖塊：${touched} 格。`);
+  }
   const buf = rebuildDskBuffer();
   if (buf) { downloadBuffer(buf, 'SAVE_?.DSK'); logMsg("DSK 匯出完成！"); }
 });
 
-// 把修改後的地圖陣列與文字陣列重新壓回 PART?.PAK
-function rebuildPakBuffer(): ArrayBuffer | null {
-  if (!rawPakBuffer || pakGroupPointers.length < 3) {
-    logMsg("靠北，PAK 還沒載入或資料格式不對！");
-    return null;
+(document.getElementById('syncMarkerBtn') as HTMLButtonElement).addEventListener('click', function () {
+  const syncFn = (window as any).syncMarkerTilesFromOwnership;
+  if (typeof syncFn !== 'function') {
+    logMsg("同步函式尚未就緒（請稍後再試）");
+    return;
   }
-
-  let curBytes = new Uint8Array(rawPakBuffer);
-  let curPtrs = pakGroupPointers.slice();
-
-  // 1. 先把 UI 上改過的 mapGrid (邏輯座標) 轉回 Uint8Array，壓回第 2 組 (index 1)
-  const gridBytes = new Uint8Array(1296 * 2);
-  const gdv = new DataView(gridBytes.buffer);
-  for (let i = 0; i < 1296; i++) {
-    gdv.setUint16(i * 2, mapGrid[i], true);
-  }
-  const r1 = replaceGroupInDsk(curBytes, curPtrs, 1, gridBytes);
-  curBytes = r1.bytes;
-  curPtrs = r1.ptrs; // 幹，這裡一定要更新 ptrs，因為前面資料長度改變了
-
-  // 2. 再把文字陣列壓回第 3 組 (index 2)
-  const textContent = pakTextLines.join('\r');
-  const textBuffer = iconv.encode(textContent, 'big5');
-  const textUint8 = new Uint8Array(textBuffer);
-
-  const r2 = replaceGroupInDsk(curBytes, curPtrs, 2, textUint8);
-  curBytes = r2.bytes;
-  curPtrs = r2.ptrs; // 保持好習慣順手更新
-
-  logMsg(`PAK 重建完成，新大小: ${curBytes.length} bytes (原: ${rawPakBuffer.byteLength} bytes)`);
-  return curBytes.buffer;
-}
-
-(document.getElementById('exportPakBtn') as HTMLButtonElement).addEventListener('click', function () {
-  if (!rawPakBuffer) { logMsg("還沒載入 PAK！"); return; }
-  const buf = rebuildPakBuffer();
-  if (buf) {
-    downloadBuffer(buf, 'PART?.PAK');
-    logMsg("PAK 匯出完成！（已包含最新中文欄位名稱）");
-  }
+  syncFn(1, 2);
+  logMsg("已依 OWNER/HOUSE 自動同步 loc+950 的購地標記圖塊。");
 });
+
+// === 土地 ID / 地段 ID / 圖塊 ID 關係分析 ===
+// 用法：載入地圖後在 console 跑 analyzeLandTileOffset()
+(window as any).analyzeLandTileOffset = function () {
+  if (!mapGrid.length || !mapLayout.length) {
+    console.warn("還沒載入地圖資料，先匯入 DSK/PAK 再分析。");
+    return;
+  }
+  if (!locDataView) {
+    console.warn("還沒載入 locData，無法讀取地段編號。");
+    return;
+  }
+
+  type Cell = { gx: number; gy: number; tileId: number; };
+  const byLoc = new Map<number, Cell[]>();
+  for (let gy = 0; gy < GRID_ROWS; gy++) {
+    for (let gx = 0; gx < GRID_COLS; gx++) {
+      const idx = gy * GRID_COLS + gx;
+      const locId = mapGrid[idx];
+      if (locId <= 0) continue;
+      const tileId = mapLayout[idx];
+      if (!byLoc.has(locId)) byLoc.set(locId, []);
+      byLoc.get(locId)!.push({ gx, gy, tileId });
+    }
+  }
+
+  let landCount = 0;
+  let pairCount950 = 0;
+  let changedTilePairs = 0;
+  let ownedCount = 0;
+  let ownedAndMarkerChanged = 0;
+  const examples: string[] = [];
+  const markerTileHist = new Map<number, number>();
+
+  for (let base = 0x33; base <= LOC_COUNT; base++) {
+    const segId = getLocField(LOC_FIELDS.SEGMENT, base);
+    if (segId <= 0) continue; // 非土地跳過
+    landCount++;
+
+    const baseCells = byLoc.get(base) || [];
+    const markCells = byLoc.get(base + 950) || [];
+    if (markCells.length === 0) continue;
+    pairCount950++;
+
+    const baseTileSet = new Set(baseCells.map(c => c.tileId));
+    const markTileSet = new Set(markCells.map(c => c.tileId));
+    const different = [...markTileSet].some(t => !baseTileSet.has(t));
+    if (different) changedTilePairs++;
+    markTileSet.forEach((t) => markerTileHist.set(t, (markerTileHist.get(t) || 0) + 1));
+
+    const owner = getLocField(LOC_FIELDS.OWNER, base);
+    const house = getLocField(LOC_FIELDS.HOUSE, base);
+    const isOwned = owner > 0 || house > 0;
+    if (isOwned) {
+      ownedCount++;
+      if (different) ownedAndMarkerChanged++;
+    }
+
+    if (examples.length < 12) {
+      const bt = [...baseTileSet].join('/');
+      const mt = [...markTileSet].join('/');
+      examples.push(`loc ${base} -> ${base + 950} | seg=${segId} owner=${owner} house=${house} | baseTile=[${bt || '-'}] markTile=[${mt || '-'}]`);
+    }
+  }
+
+  console.log("=== 購地標記分析（你描述的規則）===");
+  console.log(`土地總數(依 segId>0)：${landCount}`);
+  console.log(`有找到 loc+950 對應格的土地數：${pairCount950}`);
+  console.log(`其中「標記格 tile 與原始格 tile 不同」的土地數：${changedTilePairs}`);
+  console.log(`已持有土地數(owner>0 或 house>0)：${ownedCount}`);
+  console.log(`已持有且標記格 tile 確實不同：${ownedAndMarkerChanged}`);
+  const hist = [...markerTileHist.entries()].sort((a, b) => b[1] - a[1]).map(([t, c]) => `tile${t}:${c}`).join(', ');
+  console.log(`標記格 tile 分佈：${hist || '-'}`);
+  console.log("說明：locId 54 本身不變；被標記/變色的是 locId 1004 (=54+950) 這一格的 tile。");
+  console.log("\n範例（最多 12 筆）：");
+  examples.forEach(e => console.log(e));
+
+  const loc54Base = byLoc.get(54) || [];
+  const loc1004 = byLoc.get(1004) || [];
+  console.log(`\nloc54 格數=${loc54Base.length}, tile=[${[...new Set(loc54Base.map(c => c.tileId))].join('/') || '-'}]`);
+  console.log(`loc1004 格數=${loc1004.length}, tile=[${[...new Set(loc1004.map(c => c.tileId))].join('/') || '-'}]`);
+};
+
+// 用來直接看「購買」時 54 與 1004 的連動（owner 存在 base loc，圖塊變化在 base+950）
+// 注意：預設不自動改 house，避免把「買地」誤當成「蓋房」。
+(window as any).simulatePurchaseLink = function (baseLocId: number, ownerId: number = 1, purchasedTileId: number = 2, houseLevel?: number) {
+  if (!locDataView || !mapGrid.length || !mapLayout.length) {
+    console.warn("請先載入 DSK/PAK。");
+    return;
+  }
+  if (baseLocId <= 0 || baseLocId > LOC_COUNT) {
+    console.warn(`baseLocId 超出範圍: ${baseLocId}`);
+    return;
+  }
+
+  const markerLocId = baseLocId + 950;
+  const markerIndices: number[] = [];
+  for (let i = 0; i < mapGrid.length; i++) {
+    if (mapGrid[i] === markerLocId) markerIndices.push(i);
+  }
+
+  const beforeOwner = getLocField(LOC_FIELDS.OWNER, baseLocId);
+  const beforeHouse = getLocField(LOC_FIELDS.HOUSE, baseLocId);
+  const beforeTiles = markerIndices.map(i => mapLayout[i]);
+
+  setLocField(LOC_FIELDS.OWNER, baseLocId, ownerId);
+  if (typeof houseLevel === 'number' && houseLevel >= 0) {
+    setLocField(LOC_FIELDS.HOUSE, baseLocId, houseLevel);
+  }
+  markerIndices.forEach(i => { mapLayout[i] = purchasedTileId; });
+
+  checkAndRenderRealMap();
+  const maybeRefreshInfoPanel = (window as any).refreshInfoPanel;
+  if (typeof maybeRefreshInfoPanel === 'function') maybeRefreshInfoPanel();
+
+  const afterOwner = getLocField(LOC_FIELDS.OWNER, baseLocId);
+  const afterHouse = getLocField(LOC_FIELDS.HOUSE, baseLocId);
+  const afterTiles = markerIndices.map(i => mapLayout[i]);
+  console.log(`simulatePurchaseLink: baseLoc=${baseLocId}, markerLoc=${markerLocId}`);
+  console.log(`owner: ${beforeOwner} -> ${afterOwner}, house: ${beforeHouse} -> ${afterHouse}`);
+  console.log(`marker tiles: [${beforeTiles.join('/') || '-'}] -> [${afterTiles.join('/') || '-'}]`);
+};
+
+// 依據 loc 資料中的 OWNER/HOUSE 狀態，批次同步 loc+950 的標記圖塊
+// 預設規則：空地(tile=1)、已購地(tile=2)
+(window as any).syncMarkerTilesFromOwnership = function (emptyTileId: number = 1, ownedTileId: number = 2): number {
+  if (!locDataView || !mapGrid.length || !mapLayout.length) {
+    console.warn("請先載入 DSK/PAK。");
+    return 0;
+  }
+  let touched = 0;
+  for (let base = 0x33; base <= LOC_COUNT; base++) {
+    const segId = getLocField(LOC_FIELDS.SEGMENT, base);
+    if (segId <= 0) continue;
+    const owner = getLocField(LOC_FIELDS.OWNER, base);
+    const house = getLocField(LOC_FIELDS.HOUSE, base);
+    const targetTile = (owner > 0 || house > 0) ? ownedTileId : emptyTileId;
+    const markerLocId = base + 950;
+    for (let i = 0; i < mapGrid.length; i++) {
+      if (mapGrid[i] !== markerLocId) continue;
+      if (mapLayout[i] !== targetTile) {
+        mapLayout[i] = targetTile;
+        touched++;
+      }
+    }
+  }
+  checkAndRenderRealMap();
+  console.log(`syncMarkerTilesFromOwnership 完成，更新 ${touched} 個標記圖塊。`);
+  return touched;
+};
 
 // === 新增：除以 0 地雷掃描器 ===
 (window as any).scanZero = function () {
