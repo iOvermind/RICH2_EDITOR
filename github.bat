@@ -49,42 +49,24 @@ goto END
 echo ----------------------------------
 echo 📦 準備上傳...
 
-rem 1. 先產生 requirements (如果需要)
+rem 1. 處理 requirements.txt
 if exist "requirements.txt" (pip freeze > requirements.txt 2>nul)
 if not exist "requirements.txt" if exist ".venv" (pip freeze > requirements.txt 2>nul)
 
-rem 2. 先檢查變更，此時還沒 git add，所以 temp_git.txt 不會被追蹤
+rem 2. 檢查變更
 git status --porcelain > temp_git.txt
 set FILE_SIZE=0
 for %%i in (temp_git.txt) do set FILE_SIZE=%%~zi
 
-if "%FILE_SIZE%"=="0" goto NO_CHANGES
-del temp_git.txt
-goto DO_COMMIT_LOGIC
+if "%FILE_SIZE%"=="0" (
+    echo ⚠️ 沒有變更，跳過 commit
+    if exist "temp_git.txt" del temp_git.txt
+    goto PUSH_CLOUD
+)
 
-:NO_CHANGES
-echo ⚠️ 沒有變更，跳過 commit
-if exist "temp_git.txt" del temp_git.txt
-goto PUSH_CLOUD
-
-:DO_COMMIT_LOGIC
-rem 確定有變更，先刪除暫存檔再 add，或是直接 add 排除它
+rem 3. 執行 Commit 流程
 if exist "temp_git.txt" del temp_git.txt
 git add .
-set /p input_msg=請輸入 Commit 訊息 (Enter 自動時間):
-
-set FILE_SIZE=0
-for %%i in (temp_git.txt) do set FILE_SIZE=%%~zi
-
-if "%FILE_SIZE%"=="0" goto NO_CHANGES
-goto DO_COMMIT_LOGIC
-
-:NO_CHANGES
-echo ⚠️ 沒有變更，跳過 commit
-if exist "temp_git.txt" del temp_git.txt
-goto PUSH_CLOUD
-
-:DO_COMMIT_LOGIC
 set /p input_msg=請輸入 Commit 訊息 (Enter 自動時間): 
 
 if not "!input_msg!"=="" (
@@ -92,13 +74,11 @@ if not "!input_msg!"=="" (
     goto GIT_COMMIT
 )
 
-rem 這裡把時間獨立抓出來，完全避開在 if 區塊內解析冒號
 for /f "usebackq delims=" %%t in (`powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"`) do set "CURRENT_TIME=%%t"
 set "commit_msg=Auto update: !CURRENT_TIME!"
 
 :GIT_COMMIT
 git commit -m "!commit_msg!"
-if exist "temp_git.txt" del temp_git.txt
 
 :PUSH_CLOUD
 echo ☁️ 推送中...
@@ -110,6 +90,7 @@ if errorlevel 1 (
     echo ✅ 上傳成功！
 )
 goto END
+
 :END
 echo.
 pause
