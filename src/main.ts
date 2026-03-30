@@ -357,6 +357,7 @@ function getPriceField(fieldIdx: number, segId: number): number {
 
 function setPriceField(fieldIdx: number, segId: number, val: number): void {
   if (!priceDataView || segId <= 0 || segId >= PRICE_SEG_COUNT) return;
+  console.log(`setPriceField fi=${fieldIdx} seg=${segId} val=${val}`);  // 加這行
   priceDataView.setUint16(fieldIdx * PRICE_FIELD_SIZE + segId * 2, val, true);
 }
 
@@ -861,7 +862,7 @@ function rebuildPakBuffer(): ArrayBuffer | null {
   // 2. 打包文字訊息 (第 3 組，陣列 index 2) - 這樣你新增的地段名稱才會存檔！
   if (curPtrs.length >= 3 && pakTextLines.length > 0) {
     // DOS 遊戲通常使用 \r\n 斷行
-    const textContent = pakTextLines.join('\r\n');
+    const textContent = pakTextLines.join('\r');
     const textBytes = new Uint8Array(iconv.encode(textContent, 'big5'));
     const r2 = replaceGroupInDsk(curBytes, curPtrs, 2, textBytes);
     curBytes = r2.bytes;

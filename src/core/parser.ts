@@ -240,8 +240,19 @@ export function rebuildDskBufferCore(
     }
 
     if (priceData) {
+        const dv_check = new DataView(priceData.buffer, priceData.byteOffset, priceData.byteLength);
+        console.log('匯出前 seg19 各欄位:',
+            Array.from({ length: 8 }, (_, fi) => dv_check.getUint16(fi * 90 + 19 * 2, true))
+        );
         const r = replaceGroupInDsk(curBytes, curPtrs, 7, priceData);
         curBytes = r.bytes; curPtrs = r.ptrs;
+
+        const verify = decompressGeneralData(new DataView(r.bytes.buffer), r.ptrs[7]);
+        const dv_verify = new DataView(verify.buffer, verify.byteOffset, verify.byteLength);
+        console.log('壓縮後解壓驗證 seg19:',
+            Array.from({ length: 8 }, (_, fi) => dv_verify.getUint16(fi * 90 + 19 * 2, true))
+        );
+
         logMsg("價格表已重新壓縮。");
     }
 
