@@ -598,14 +598,28 @@ function openEditPanel(gridX: number, gridY: number): void {
     (document.getElementById('editUnk3') as HTMLSelectElement).value = unk3.toString();
     const suggest = detectMarkerDir(locId);
     (document.getElementById('unk3Hint') as HTMLSpanElement).textContent = `建議方向：${dirLabel(suggest)} (${suggest})`;
+
+    // 只處理你新增的不明欄位，避開 3, 9, A, B
+    ['UnkD', 'Unk10', 'Unk11', 'Unk12', 'Unk13'].forEach(suffix => {
+      const el = document.getElementById(`edit${suffix}`) as HTMLInputElement;
+      if (el) {
+        const fieldKey = suffix.toUpperCase(); // 轉回大寫 UNKD 去對應 LOC_FIELDS
+        el.value = getLocField(LOC_FIELDS[fieldKey as keyof typeof LOC_FIELDS], locId).toString();
+      }
+    });
     (document.getElementById('editDirLeft') as HTMLInputElement).value = getLocField(LOC_FIELDS.LEFT, locId).toString();
     (document.getElementById('editDirUp') as HTMLInputElement).value = getLocField(LOC_FIELDS.UP, locId).toString();
     (document.getElementById('editDirRight') as HTMLInputElement).value = getLocField(LOC_FIELDS.RIGHT, locId).toString();
     (document.getElementById('editDirDown') as HTMLInputElement).value = getLocField(LOC_FIELDS.DOWN, locId).toString();
     renderPriceTable(segId);
   } else {
-    ['editSegId', 'editSpecial', 'editUnk9', 'editUnkA', 'editUnkB', 'editUnk3', 'editDirLeft', 'editDirUp', 'editDirRight', 'editDirDown'].forEach(id => {
-      (document.getElementById(id) as HTMLInputElement).value = '0';
+    [
+      'editSegId', 'editSpecial', 'editUnk9', 'editUnkA', 'editUnkB', 'editUnk3',
+      'editDirLeft', 'editDirUp', 'editDirRight', 'editDirDown',
+      'editUnkD', 'editUnk10', 'editUnk11', 'editUnk12', 'editUnk13'
+    ].forEach(id => {
+      const el = document.getElementById(id) as HTMLInputElement;
+      if (el) el.value = '0';
     });
     (document.getElementById('segNameDisplay') as HTMLSpanElement).textContent = '';
     (document.getElementById('specialNameDisplay') as HTMLSpanElement).textContent = '';
@@ -861,7 +875,7 @@ function rebuildPakBuffer(): ArrayBuffer | null {
 
   // 2. 打包文字訊息 (第 3 組，陣列 index 2) - 這樣你新增的地段名稱才會存檔！
   if (curPtrs.length >= 3 && pakTextLines.length > 0) {
-    // DOS 遊戲通常使用 \r\n 斷行
+    // DOS 遊戲通常使用 \r 斷行
     const textContent = pakTextLines.join('\r');
     const textBytes = new Uint8Array(iconv.encode(textContent, 'big5'));
     const r2 = replaceGroupInDsk(curBytes, curPtrs, 2, textBytes);
@@ -910,4 +924,20 @@ initDebugTools({
   getLocField,
   setLocField,
   checkAndRenderRealMap
+});
+
+// 自動綁定所有 UNK 欄位的儲存邏輯
+['UnkD', 'Unk10', 'Unk11', 'Unk12', 'Unk13'].forEach(suffix => {
+  const el = document.getElementById(`edit${suffix}`);
+  if (el) {
+    el.addEventListener('input', (e) => {
+      if (selectedGridX < 0) return;
+      const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
+      if (locId > 0) {
+        const val = parseInt((e.target as HTMLInputElement).value) || 0;
+        const fieldKey = suffix.toUpperCase();
+        setLocField(LOC_FIELDS[fieldKey as keyof typeof LOC_FIELDS], locId, val);
+      }
+    });
+  }
 });

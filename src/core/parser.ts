@@ -122,6 +122,15 @@ export function replaceGroupInDsk(dskBytes: Uint8Array, groupPointers: number[],
         const ptrVal = (updatedPtrs[i] - DSK_DATA_BASE) / 2;
         dv.setUint16(DSK_DATA_BASE + i * 2, ptrVal, true);
     }
+
+    // 更新哨兵指標（緊接在最後一個有效指標之後）
+    // 哨兵的值應該永遠等於 (檔案大小 - BASE) / 2，讓它繼續卡在邊界上
+    const sentinelOffset = DSK_DATA_BASE + updatedPtrs.length * 2;
+    if (sentinelOffset + 1 < newBuf.length) {
+        const sentinelVal = (newTotal - DSK_DATA_BASE) / 2;
+        dv.setUint16(sentinelOffset, sentinelVal, true);
+    }
+
     return { bytes: newBuf, ptrs: updatedPtrs };
 }
 
