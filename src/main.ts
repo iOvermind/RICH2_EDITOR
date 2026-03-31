@@ -171,7 +171,7 @@ function parseSaveDsk(dataView: DataView): void {
 
     if (msgData.length > 0) {
       const text = iconv.decode(Buffer.from(msgData), 'big5');
-      pakTextLines = text.split(/\r\n|\r|\n/);
+      pakTextLines = text.split('\r');
 
       SPECIAL_NAMES = [];
       for (let i = 0; i < 11; i++) {
