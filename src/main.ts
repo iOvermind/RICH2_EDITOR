@@ -290,7 +290,7 @@ function getSpecialName(spId: number): string {
   return (spId >= 0 && spId < SPECIAL_NAMES.length) ? SPECIAL_NAMES[spId] : '';
 }
 
-(document.getElementById('editSpecial') as HTMLInputElement).addEventListener('input', function (e: Event) {
+(document.getElementById('editSpecial') as HTMLInputElement).addEventListener('change', function (e: Event) {
   if (selectedGridX < 0) return;
   const target = e.target as HTMLInputElement;
   const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
@@ -397,7 +397,7 @@ function renderPriceTable(segId: number): void {
 
   // 底下的事件監聽維持原樣即可
   tbody.querySelectorAll('input').forEach(inp => {
-    inp.addEventListener('input', (e) => {
+    inp.addEventListener('change', (e) => {
       const target = e.target as HTMLInputElement;
       const fi = parseInt(target.dataset.fi || '0');
       const seg = parseInt(target.dataset.seg || '0');
@@ -642,7 +642,7 @@ function setLocWithCoords(locId: number, gridX: number, gridY: number): void {
   }
 }
 
-(document.getElementById('editLocId') as HTMLInputElement).addEventListener('input', function (e: Event) {
+(document.getElementById('editLocId') as HTMLInputElement).addEventListener('change', function (e: Event) {
   if (selectedGridX < 0) return;
   const target = e.target as HTMLInputElement;
   const newLocId = parseInt(target.value) || 0;
@@ -683,7 +683,7 @@ function setLocWithCoords(locId: number, gridX: number, gridY: number): void {
   validateDirWarnings(newLocId, selectedGridX, selectedGridY);  // ← locId/gridX/gridY 全換
 });
 
-(document.getElementById('editSegId') as HTMLInputElement).addEventListener('input', function (e: Event) {
+(document.getElementById('editSegId') as HTMLInputElement).addEventListener('change', function (e: Event) {
   if (selectedGridX < 0) return;
   const target = e.target as HTMLInputElement;
   const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
@@ -705,13 +705,13 @@ function setLocWithCoords(locId: number, gridX: number, gridY: number): void {
   }
 });
 
-(document.getElementById('editUnk9') as HTMLInputElement).addEventListener('input', function (e: Event) {
+(document.getElementById('editUnk9') as HTMLInputElement).addEventListener('change', function (e: Event) {
   if (selectedGridX < 0) return;
   const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
   if (locId > 0) setLocField(LOC_FIELDS.UNK9, locId, parseInt((e.target as HTMLInputElement).value) || 0);
 });
 
-(document.getElementById('editUnkA') as HTMLInputElement).addEventListener('input', function (e: Event) {
+(document.getElementById('editUnkA') as HTMLInputElement).addEventListener('change', function (e: Event) {
   if (selectedGridX < 0) return;
   const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
   if (locId > 0) {
@@ -722,7 +722,7 @@ function setLocWithCoords(locId: number, gridX: number, gridY: number): void {
   }
 });
 
-(document.getElementById('editUnkB') as HTMLInputElement).addEventListener('input', function (e: Event) {
+(document.getElementById('editUnkB') as HTMLInputElement).addEventListener('change', function (e: Event) {
   if (selectedGridX < 0) return;
   const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
   if (locId > 0) {
@@ -751,10 +751,10 @@ function dirInputHandler(fieldConst: number) {
     validateDirWarnings(locId, selectedGridX, selectedGridY);
   };
 }
-(document.getElementById('editDirLeft') as HTMLInputElement).addEventListener('input', dirInputHandler(LOC_FIELDS.LEFT));
-(document.getElementById('editDirUp') as HTMLInputElement).addEventListener('input', dirInputHandler(LOC_FIELDS.UP));
-(document.getElementById('editDirRight') as HTMLInputElement).addEventListener('input', dirInputHandler(LOC_FIELDS.RIGHT));
-(document.getElementById('editDirDown') as HTMLInputElement).addEventListener('input', dirInputHandler(LOC_FIELDS.DOWN));
+(document.getElementById('editDirLeft') as HTMLInputElement).addEventListener('change', dirInputHandler(LOC_FIELDS.LEFT));
+(document.getElementById('editDirUp') as HTMLInputElement).addEventListener('change', dirInputHandler(LOC_FIELDS.UP));
+(document.getElementById('editDirRight') as HTMLInputElement).addEventListener('change', dirInputHandler(LOC_FIELDS.RIGHT));
+(document.getElementById('editDirDown') as HTMLInputElement).addEventListener('change', dirInputHandler(LOC_FIELDS.DOWN));
 
 function validateDirWarnings(locId: number, gx: number, gy: number): void {
   const msgs: string[] = [];
@@ -930,7 +930,7 @@ initDebugTools({
 ['UnkD', 'Unk10', 'Unk11', 'Unk12', 'Unk13'].forEach(suffix => {
   const el = document.getElementById(`edit${suffix}`);
   if (el) {
-    el.addEventListener('input', (e) => {
+    el.addEventListener('change', (e) => {
       if (selectedGridX < 0) return;
       const locId = mapGrid[selectedGridY * GRID_COLS + selectedGridX];
       if (locId > 0) {
