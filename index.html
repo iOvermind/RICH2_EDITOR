@@ -164,7 +164,32 @@
     </div>
 
     <div class="flex items-center gap-3">
-      <!-- 將原本的 input file 綁定到設計圖的按鈕樣式上 -->
+      <!-- 遊戲資料夾工作流：選資料夾 → 選地圖 → 一次性存回 dsk/pak/exe -->
+      <button id="pickFolderBtn"
+        class="px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-on-surface bg-[#2a2a2a] hover:bg-[#3a3a3a] transition-all rounded flex items-center gap-1.5">
+        <span class="material-symbols-outlined text-sm">folder_open</span>選擇遊戲資料夾
+      </button>
+      <select id="mapSelect"
+        class="px-2 py-1.5 text-xs font-bold text-on-surface bg-[#1c1c1c] border border-outline-variant/30 rounded outline-none focus:ring-1 focus:ring-primary">
+        <option value="0">台灣 (Part1/Save_7)</option>
+        <option value="1">香港 (Part2/Save_8)</option>
+        <option value="2">大富翁城 (Part3/Save_9)</option>
+      </select>
+      <span id="folderStatus" class="text-[10px] text-on-surface-variant/70 max-w-[120px] truncate">未選資料夾</span>
+      <div class="flex items-center gap-1" title="存檔時寫入該圖的特殊地點數 [0x1098]（= 特殊地點最大編號）。留空＝不動。">
+        <span class="text-[10px] text-on-surface-variant/70">特殊數</span>
+        <input type="number" id="specialCountInput" min="0" max="49" placeholder="—"
+          class="w-12 px-1 py-1 text-xs font-mono text-on-surface bg-[#1c1c1c] border border-outline-variant/30 rounded outline-none focus:ring-1 focus:ring-primary">
+        <button id="specialAutoBtn"
+          class="px-1.5 py-1 text-[10px] font-bold text-on-surface bg-[#2a2a2a] hover:bg-[#3a3a3a] rounded">自動</button>
+      </div>
+      <button id="saveToGameBtn"
+        class="px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-on-primary bg-primary/90 hover:bg-primary transition-all rounded flex items-center gap-1.5">
+        <span class="material-symbols-outlined text-sm">save</span>儲存到遊戲
+      </button>
+
+      <span class="w-px h-5 bg-outline-variant/20"></span>
+      <!-- 備援：手動載入單一檔案 -->
       <label
         class="cursor-pointer px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-on-surface hover:bg-[#2a2a2a] transition-all rounded">
         LOAD PAK
@@ -379,8 +404,14 @@
 
         <!-- 價格頁 -->
         <div id="tabPrice" class="tab-pane space-y-4">
-          <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">
-            目前地段：<span id="priceSegLabel" class="text-tertiary ml-1">-</span>
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">
+              目前地段：<span id="priceSegLabel" class="text-tertiary ml-1">-</span>
+            </div>
+            <button id="autoFillPriceBtn" title="依土地價自動帶入增值價與各級過路費（只填目前為 0 的欄位）"
+              class="px-2 py-1 bg-surface-container-highest hover:bg-surface-bright text-[10px] font-bold uppercase tracking-widest text-on-surface rounded transition-all flex items-center gap-1 shrink-0">
+              <span class="material-symbols-outlined text-xs">auto_fix_high</span>帶入過路費
+            </button>
           </div>
           <div class="bg-surface-container-lowest rounded-md overflow-hidden border border-outline-variant/10">
             <table id="priceTable" class="w-full text-left text-xs">
@@ -399,7 +430,13 @@
 
         <!-- 警告頁 -->
         <div id="tabWarn" class="tab-pane space-y-3">
-          <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">點擊警告可跳至該格子</div>
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">點擊警告可跳至該格子</div>
+            <button id="repairMapBtn" title="自動修復可安全修復的問題（座標同步、清除孤兒記錄）"
+              class="px-2 py-1 bg-surface-container-highest hover:bg-surface-bright text-[10px] font-bold uppercase tracking-widest text-on-surface rounded transition-all flex items-center gap-1 shrink-0">
+              <span class="material-symbols-outlined text-xs">healing</span>修復地圖
+            </button>
+          </div>
           <div id="warnList" class="space-y-2 text-xs"></div>
         </div>
 
@@ -408,6 +445,11 @@
       <!-- Sidebar Actions (右下：匯出按鈕區) -->
       <div
         class="p-4 bg-surface-container-high border-t border-outline-variant/15 flex flex-col gap-2 action-block shrink-0">
+        <button id="addLandBtn" title="把選取的格子做成一塊完整可買賣的土地（自動配編號、接方向、地段+價格、購地標記）"
+          class="w-full py-2 bg-primary/90 hover:bg-primary text-xs font-bold uppercase tracking-widest text-on-primary rounded transition-all flex items-center justify-center gap-2">
+          <span class="material-symbols-outlined text-sm">add_home</span>
+          新增土地
+        </button>
         <button id="syncMarkerBtn"
           class="w-full py-2 bg-surface-container-highest hover:bg-surface-bright text-xs font-bold uppercase tracking-widest text-on-surface rounded transition-all flex items-center justify-center gap-2">
           <span class="material-symbols-outlined text-sm">sync</span>

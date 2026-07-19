@@ -8,6 +8,8 @@ import {
   LOC_COUNT, LOC_FIELDS
 } from './config/constants';
 import { parseMapPakCore, replaceGroupInDsk, parseSaveDskCore, rebuildDskBufferCore } from './core/parser';
+import { analyzeIntegrity, repairMap, findFreeLandId, wireDirectionsFromGrid } from './core/integrity';
+import { MAPS, isSupported as fsSupported, hasFolder, pickGameFolder, readFile as readGameFile, writeFile as writeGameFile, patchExe, readSpecialCount } from './core/gamefolder';
 import { initTilePicker, updateTilePickerSelection } from './ui/tilepicker';
 import { initDebugTools } from './tools/debugger';
 import { drawGrid, renderTilesetDump, renderRealMapEngine } from './render/renderer';
@@ -361,7 +363,20 @@ function setPriceField(fieldIdx: number, segId: number, val: number): void {
   priceDataView.setUint16(fieldIdx * PRICE_FIELD_SIZE + segId * 2, val, true);
 }
 
+let currentPriceSeg = 0; // 記住價格頁目前顯示的地段，給「複製價格」按鈕用
+
+// 過路費是逐段手工設定的（沒有固定倍率），所以用「複製現有地段的完整價格結構」比套公式可靠。
+// 複製欄位 0~7（土地價/增值價/空地~五層過路費）；欄位 8、9 不動。回傳複製了幾項。
+function copySegmentPrices(fromSeg: number, toSeg: number): number {
+  if (!priceDataView) return 0;
+  if (fromSeg <= 0 || fromSeg >= PRICE_SEG_COUNT || toSeg <= 0 || toSeg >= PRICE_SEG_COUNT || fromSeg === toSeg) return 0;
+  let n = 0;
+  for (let f = 0; f <= 7; f++) { setPriceField(f, toSeg, getPriceField(f, fromSeg)); n++; }
+  return n;
+}
+
 function renderPriceTable(segId: number): void {
+  currentPriceSeg = segId;
   (document.getElementById('priceSegLabel') as HTMLSpanElement).textContent =
     segId > 0 ? `${segId} - ${getSegName(segId)}` : '無（非土地）';
   const tbody = document.getElementById('priceTbody') as HTMLTableSectionElement;
@@ -433,28 +448,18 @@ function runValidation(): void {
     }
   }
 
-  for (let ci = 0; ci < GRID_COLS * GRID_ROWS; ci++) {
-    const lid = mapGrid[ci];
-    if (lid <= 0) continue;
-    const gx = ci % GRID_COLS, gy = Math.floor(ci / GRID_COLS);
-    const dirs = [
-      { label: '左', field: LOC_FIELDS.LEFT, nx: gx - 1, ny: gy },
-      { label: '右', field: LOC_FIELDS.RIGHT, nx: gx + 1, ny: gy },
-      { label: '上', field: LOC_FIELDS.UP, nx: gx, ny: gy - 1 },
-      { label: '下', field: LOC_FIELDS.DOWN, nx: gx, ny: gy + 1 },
-    ];
-    dirs.forEach(d => {
-      const target = getLocField(d.field, lid);
-      if (target === 0) return;
-      if (d.nx < 0 || d.nx >= GRID_COLS || d.ny < 0 || d.ny >= GRID_ROWS) {
-        warnings.push({ type: 'dir', cells: [ci], msg: `地點 ${lid} (${gx},${gy}) 往${d.label}→地點 ${target}，但超出地圖邊界` });
-        return;
-      }
-      const neighborLid = mapGrid[d.ny * GRID_COLS + d.nx];
-      if (neighborLid !== target) {
-        warnings.push({ type: 'dir', cells: [ci], msg: `地點 ${lid} (${gx},${gy}) 往${d.label}→地點 ${target}，但鄰格是地點 ${neighborLid}` });
-      }
-    });
+  // 註：原本這裡有一個「方向指標必須等於 grid 鄰格」的檢查，但大富翁的移動是
+  // 有向路徑圖（路口/轉角合法地不相鄰），該假設在正常地圖上會狂噴假警報，已移除。
+  // 真正可靠的「指向不存在地點」由下方 integrity 的 dangling-ref 負責。
+
+  // === 結構完整性檢查（integrity.ts）：抓引擎會崩的真實損毀 ===
+  if (locDataView) {
+    const issues = analyzeIntegrity(mapGrid, locDataView, getSpecialBoundary(), priceDataView);
+    for (const iss of issues) {
+      const cells: number[] = [];
+      for (let i = 0; i < mapGrid.length; i++) if (mapGrid[i] === iss.locId) { cells.push(i); break; }
+      warnings.push({ type: iss.kind, cells, msg: `【完整性/${iss.kind}】${iss.detail}` });
+    }
   }
 
   const warnTab = document.querySelector('[data-tab="tabWarn"]') as HTMLDivElement;
@@ -462,6 +467,13 @@ function runValidation(): void {
     warnTab.textContent = warnings.length > 0 ? `⚠ 警告 (${warnings.length})` : '✅ 無警告';
   }
   renderWarnList();
+}
+
+// 土地 vs 特殊/道路的分界：引擎寫死「地點編號 ≤ 49 = 特殊/非土地、≥ 50 = 土地」，
+// 三張圖都一樣（不是 per-map，也不是 [0x1098]）。分界值回傳 49（id>49 視為土地）。
+const LAND_ID_BOUNDARY = 49;
+function getSpecialBoundary(): number {
+  return LAND_ID_BOUNDARY;
 }
 
 function renderWarnList(): void {
@@ -629,16 +641,23 @@ function openEditPanel(gridX: number, gridY: number): void {
   validateDirWarnings(locId, gridX, gridY);
 }
 
-function setLocWithCoords(locId: number, gridX: number, gridY: number): void {
+function setLocWithCoords(locId: number, _gridX: number, _gridY: number): void {
   if (locId <= 0 || !locData) return;
-  const existingX = getLocField(LOC_FIELDS.X, locId);
-  const existingY = getLocField(LOC_FIELDS.Y, locId);
-
-  // 💥 幹！就是這行防呆把你搞死了！
-  if (existingX === 0 && existingY === 0) {
-    setLocField(LOC_FIELDS.X, locId, gridX);
-    setLocField(LOC_FIELDS.Y, locId, gridY);
-    logMsg(`地點 ${locId} 座標自動設為 (${gridX}, ${gridY})`);
+  // 座標永遠同步成該地點在 grid 上所有格子的「左上角」(min gx, min gy)，
+  // 這是引擎存 X/Y 的方式；不再只在 0 時才寫，避免移動地點留下重複/殘留座標。
+  let minX = GRID_COLS, minY = GRID_ROWS, found = false;
+  for (let i = 0; i < mapGrid.length; i++) {
+    if (mapGrid[i] !== locId) continue;
+    found = true;
+    const gx = i % GRID_COLS, gy = Math.floor(i / GRID_COLS);
+    if (gx < minX) minX = gx;
+    if (gy < minY) minY = gy;
+  }
+  if (!found) return;
+  if (getLocField(LOC_FIELDS.X, locId) !== minX || getLocField(LOC_FIELDS.Y, locId) !== minY) {
+    setLocField(LOC_FIELDS.X, locId, minX);
+    setLocField(LOC_FIELDS.Y, locId, minY);
+    logMsg(`地點 ${locId} 座標同步為 (${minX}, ${minY})`);
   }
 }
 
@@ -756,24 +775,24 @@ function dirInputHandler(fieldConst: number) {
 (document.getElementById('editDirRight') as HTMLInputElement).addEventListener('change', dirInputHandler(LOC_FIELDS.RIGHT));
 (document.getElementById('editDirDown') as HTMLInputElement).addEventListener('change', dirInputHandler(LOC_FIELDS.DOWN));
 
-function validateDirWarnings(locId: number, gx: number, gy: number): void {
+function validateDirWarnings(locId: number, _gx: number, _gy: number): void {
   const msgs: string[] = [];
   const warnMsgEl = document.getElementById('dirWarnMsg') as HTMLDivElement;
   if (locId <= 0 || !locData) { warnMsgEl.textContent = ''; return; }
+  // 只提示「指向的地點不在地圖上」(幽靈地點)——這才是會害引擎走進未定義地點的真問題。
+  // 不再檢查方向指標是否等於 grid 鄰格（路口/轉角合法地不相鄰，那是假警報）。
   const dirs = [
-    { label: '左', field: LOC_FIELDS.LEFT, nx: gx - 1, ny: gy },
-    { label: '右', field: LOC_FIELDS.RIGHT, nx: gx + 1, ny: gy },
-    { label: '上', field: LOC_FIELDS.UP, nx: gx, ny: gy - 1 },
-    { label: '下', field: LOC_FIELDS.DOWN, nx: gx, ny: gy + 1 },
+    { label: '左', field: LOC_FIELDS.LEFT },
+    { label: '右', field: LOC_FIELDS.RIGHT },
+    { label: '上', field: LOC_FIELDS.UP },
+    { label: '下', field: LOC_FIELDS.DOWN },
   ];
   dirs.forEach(d => {
     const target = getLocField(d.field, locId);
     if (target === 0) return;
-    if (d.nx < 0 || d.nx >= GRID_COLS || d.ny < 0 || d.ny >= GRID_ROWS) {
-      msgs.push(`⚠ 往${d.label}→${target} 超出地圖`); return;
-    }
-    const neighborLid = mapGrid[d.ny * GRID_COLS + d.nx];
-    if (neighborLid !== target) msgs.push(`⚠ 往${d.label}→${target}，鄰格實際是 ${neighborLid}`);
+    let onGrid = false;
+    for (let i = 0; i < mapGrid.length; i++) { if (mapGrid[i] === target) { onGrid = true; break; } }
+    if (!onGrid) msgs.push(`⚠ 往${d.label}→${target}，但 ${target} 不在地圖上（幽靈地點）`);
   });
   warnMsgEl.textContent = msgs.join('　');
 }
@@ -840,6 +859,16 @@ function downloadBuffer(buffer: ArrayBuffer, filename: string): void {
   if (typeof syncFn === 'function') {
     const touched = syncFn(1, 2);
     logMsg(`匯出前自動同步購地標記圖塊：${touched} 格。`);
+  }
+  // 匯出前結構完整性掃描：有問題就警告（不擋，讓你自行決定）
+  if (locDataView) {
+    const issues = analyzeIntegrity(mapGrid, locDataView, getSpecialBoundary(), priceDataView);
+    if (issues.length) {
+      logMsg(`⚠ 偵測到 ${issues.length} 個結構問題（詳見「警告」頁），遊戲可能出錯：`);
+      issues.slice(0, 8).forEach(i => logMsg(`　・${i.detail}`));
+    } else {
+      logMsg('✅ 結構完整性檢查通過。');
+    }
   }
   const buf = rebuildDskBuffer();
   if (buf) {
@@ -914,6 +943,219 @@ if (exportPakBtn) {
   syncFn(1, 2);
   logMsg("已依 OWNER/HOUSE 自動同步 loc+950 的購地標記圖塊。");
 });
+
+// 「修復地圖」：自動修可安全修的（座標同步、清除孤兒記錄），其餘列在警告頁
+const repairMapBtn = document.getElementById('repairMapBtn');
+if (repairMapBtn) {
+  repairMapBtn.addEventListener('click', function () {
+    if (!locDataView) { logMsg('請先載入 DSK 才能修復！'); return; }
+    const { fixed, remaining } = repairMap(mapGrid, locDataView, getSpecialBoundary());
+    logMsg(`🔧 修復完成：自動修正 ${fixed} 項；剩餘 ${remaining.length} 項需人工判斷（見警告頁）。`);
+    checkAndRenderRealMap();
+    runValidation();
+  });
+}
+
+// 「複製價格」：把另一個地段的完整價格結構(土地價/增值/各級過路費)複製到目前地段
+const autoFillPriceBtn = document.getElementById('autoFillPriceBtn');
+if (autoFillPriceBtn) {
+  autoFillPriceBtn.addEventListener('click', function () {
+    if (!priceDataView) { logMsg('請先載入 DSK！'); return; }
+    if (currentPriceSeg <= 0) { logMsg('請先選一個土地格（要有地段）。'); return; }
+    const src = prompt(`要把哪個地段的價格複製到地段 ${currentPriceSeg}？（輸入來源地段編號 1~44）`, '');
+    if (src === null) return;
+    const from = parseInt(src) || 0;
+    const n = copySegmentPrices(from, currentPriceSeg);
+    if (n > 0) { logMsg(`已把地段 ${from} 的價格複製到地段 ${currentPriceSeg}（${n} 欄）。`); renderPriceTable(currentPriceSeg); }
+    else logMsg('複製失敗：來源/目標地段無效或相同。');
+  });
+}
+
+// 「新增土地」：把選取的格子做成一塊完整、可運作的買賣土地
+const addLandBtn = document.getElementById('addLandBtn');
+if (addLandBtn) {
+  addLandBtn.addEventListener('click', function () {
+    if (!locData || !locDataView) { logMsg('請先載入 DSK！'); return; }
+    if (selectedGridX < 0) { logMsg('請先在地圖上點選要放土地的格子。'); return; }
+    const ci = selectedGridY * GRID_COLS + selectedGridX;
+    const boundary = getSpecialBoundary();
+
+    // 決定土地編號：此格若已是道路/土地(路徑編號)就沿用（把道路轉成土地，方向沿用）；否則配一個自由編號
+    const cur = mapGrid[ci];
+    let base: number;
+    if (cur > boundary && cur <= 282) {
+      base = cur;
+    } else {
+      base = findFreeLandId(mapGrid, locDataView, boundary);
+      if (base < 0) { logMsg('沒有可用的土地編號了（道路/土地區已滿，或需先 patch Run.exe 開放 maxLocId）。'); return; }
+      mapGrid[ci] = base;
+    }
+
+    // 選地段（留空＝自動新增下一個空地段）
+    const segStr = prompt('土地要屬於哪個地段編號？(1~44；留空＝自動新增下一個)', '');
+    if (segStr === null) return;
+    let seg = parseInt(segStr || '0');
+    if (!seg) {
+      const used = new Set<number>();
+      for (let i = 1; i < LOC_COUNT; i++) { const s = getLocField(LOC_FIELDS.SEGMENT, i); if (s > 0) used.add(s); }
+      seg = -1;
+      for (let s = 1; s < PRICE_SEG_COUNT; s++) { if (!used.has(s)) { seg = s; break; } }
+      if (seg < 0) { logMsg('地段已滿（1~44）。'); return; }
+      const nm = prompt(`新地段 ${seg} 的名稱：`, `地段${seg}`);
+      if (nm) { while (SEGMENT_NAMES.length <= seg) SEGMENT_NAMES.push(''); SEGMENT_NAMES[seg] = nm; pakTextLines[25 + seg] = '             ' + nm; }
+    }
+    if (seg < 1 || seg >= PRICE_SEG_COUNT) { logMsg(`地段 ${seg} 超出範圍 (1~44)。`); return; }
+
+    // 基本欄位
+    setLocField(LOC_FIELDS.SPECIAL, base, 0);
+    setLocField(LOC_FIELDS.OWNER, base, 0);
+    setLocField(LOC_FIELDS.HOUSE, base, 0);
+    setLocField(LOC_FIELDS.RESERVE, base, 0);
+
+    // 先放購地標記到相鄰空格（讓 applySegmentDerivedFields 的方向判斷讀得到）
+    const markerId = base + 950;
+    if (!mapGrid.some(v => v === markerId)) {
+      let placed = false;
+      for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]] as const) {
+        const nx = selectedGridX + dx, ny = selectedGridY + dy;
+        if (nx < 0 || nx >= GRID_COLS || ny < 0 || ny >= GRID_ROWS) continue;
+        const nci = ny * GRID_COLS + nx;
+        if (mapGrid[nci] === 0) { mapGrid[nci] = markerId; mapLayout[nci] = 1; placed = true; break; }
+      }
+      if (!placed) logMsg(`（找不到相鄰空格放購地標記 ${markerId}，可稍後手動放置）`);
+    }
+
+    // 地段衍生欄位 + 座標 + 方向
+    applySegmentDerivedFields(base, seg);
+    setLocWithCoords(base, selectedGridX, selectedGridY);
+    const wired = wireDirectionsFromGrid(mapGrid, locDataView, base);
+    logMsg(`土地 ${base}（地段 ${seg}）已建立；自動接方向：${wired.map(w => w.dir + '→' + w.tgt).join('、') || '（無相鄰路徑，請手動接方向）'}`);
+
+    // 確保地段有土地買價
+    if (priceDataView && getPriceField(0, seg) === 0) {
+      const pStr = prompt(`地段 ${seg} 尚無土地買價，請輸入土地價格：`, '600');
+      const p = parseInt(pStr || '0') || 0;
+      if (p > 0) setPriceField(0, seg, p);
+    }
+
+    checkAndRenderRealMap();
+    openEditPanel(selectedGridX, selectedGridY);
+    runValidation();
+    logMsg('✅ 新增土地完成。若「警告」頁出現死胡同/幽靈指標，代表方向還沒接好，請補齊。');
+  });
+}
+
+// ============ 遊戲資料夾工作流（File System Access API）============
+// 選遊戲資料夾 → 用下拉選單選地圖 → 一次性把 DSK/PAK/EXE 寫回資料夾
+function applyPakBuffer(buf: ArrayBuffer, fileName: string): void {
+  rawPakBuffer = buf.slice(0);
+  loadedPakFileName = fileName;
+  const b = document.getElementById('exportPakBtn'); if (b) b.textContent = `匯出 ${fileName}`;
+  parseMapPak(new DataView(buf));
+}
+function applyDskBuffer(buf: ArrayBuffer, fileName: string): void {
+  rawDskBuffer = buf.slice(0);
+  loadedDskFileName = fileName;
+  const b = document.getElementById('exportDskBtn'); if (b) b.textContent = `匯出 ${fileName}`;
+  parseSaveDsk(new DataView(buf));
+}
+let currentMapIndex = 0;
+// 自動推算「特殊地點數」= grid 上有設特殊種類(SPECIAL>0)的格子中，最大的地點編號(≤49)
+function autoSpecialCount(): number {
+  let maxSp = 0;
+  for (let i = 0; i < mapGrid.length; i++) {
+    const id = mapGrid[i];
+    if (id <= 0 || id > 49) continue;
+    if (locDataView && getLocField(LOC_FIELDS.SPECIAL, id) > 0 && id > maxSp) maxSp = id;
+  }
+  return maxSp;
+}
+async function loadMapFromFolder(idx: number): Promise<void> {
+  const m = MAPS[idx]; if (!m) return;
+  currentMapIndex = idx;
+  try {
+    applyPakBuffer(await readGameFile(m.pak), m.pak);
+    applyDskBuffer(await readGameFile(m.dsk), m.dsk);
+    logMsg(`已從遊戲資料夾載入【${m.name}】：${m.pak} + ${m.dsk}`);
+    // 讀 exe 目前的特殊地點數，顯示到欄位
+    try {
+      const sc = await readSpecialCount(idx);
+      const inp = document.getElementById('specialCountInput') as HTMLInputElement | null;
+      if (inp) inp.value = sc.toString();
+      logMsg(`目前【${m.name}】特殊地點數 [0x1098] = ${sc}（自動推算最大特殊編號 = ${autoSpecialCount()}）`);
+    } catch { /* 沒有 exe 也沒關係 */ }
+  } catch (err) {
+    logMsg(`載入【${m.name}】失敗：${(err as Error).message}`);
+  }
+}
+async function saveToGame(): Promise<void> {
+  if (!hasFolder()) { logMsg('請先「選擇遊戲資料夾」。'); return; }
+  if (!isSaveLoaded) { logMsg('尚未載入地圖，無法存回。'); return; }
+  try {
+    const syncFn = (window as any).syncMarkerTilesFromOwnership;
+    if (typeof syncFn === 'function') syncFn(1, 2);
+    if (locDataView) {
+      const issues = analyzeIntegrity(mapGrid, locDataView, getSpecialBoundary(), priceDataView);
+      if (issues.length) logMsg(`⚠ 偵測到 ${issues.length} 個結構問題（見警告頁），仍照你的意思寫回。`);
+    }
+    const dskBuf = rebuildDskBuffer();
+    const pakBuf = rebuildPakBuffer();
+    if (dskBuf) await writeGameFile(loadedDskFileName, dskBuf);
+    if (pakBuf) await writeGameFile(loadedPakFileName, pakBuf);
+    // 特殊地點數：讀欄位（空白＝不動 exe 的 [0x1098]）
+    const scInp = document.getElementById('specialCountInput') as HTMLInputElement | null;
+    const sc = scInp && scInp.value !== '' ? (parseInt(scInp.value) || 0) : undefined;
+    const r = await patchExe(logMsg, currentMapIndex, sc);
+    let msg = `✅ 已一次性寫回：${loadedDskFileName}、${loadedPakFileName}、Run.exe（maxLoc 更動 ${r.maxLocChanged} 圖`;
+    if (r.specialChanged) msg += `；${MAPS[currentMapIndex].name} 特殊數 ${r.specialFrom}→${r.specialTo}`;
+    logMsg(msg + '）。');
+    if (sc != null && sc > r.specialFrom) {
+      logMsg(`⚠ 特殊數已調高到 ${sc}：請確認編號 1~${sc} 全是真正的特殊地點（含公園），別夾到海上道路，否則踩上去會當機。`);
+    }
+  } catch (err) {
+    logMsg(`存回失敗：${(err as Error).message}`);
+  }
+}
+
+const pickFolderBtn = document.getElementById('pickFolderBtn');
+if (pickFolderBtn) {
+  if (!fsSupported()) {
+    (pickFolderBtn as HTMLButtonElement).disabled = true;
+    pickFolderBtn.textContent = '瀏覽器不支援資料夾存取';
+    logMsg('此瀏覽器不支援 File System Access API，請用 Chrome/Edge，或改用手動 LOAD/匯出。');
+  } else {
+    pickFolderBtn.addEventListener('click', async () => {
+      try {
+        const name = await pickGameFolder();
+        const st = document.getElementById('folderStatus'); if (st) st.textContent = `資料夾：${name}`;
+        logMsg(`已選擇遊戲資料夾：${name}`);
+        const sel = document.getElementById('mapSelect') as HTMLSelectElement;
+        await loadMapFromFolder(parseInt(sel.value) || 0);
+      } catch (err) { logMsg(`選擇資料夾已取消或失敗：${(err as Error).message}`); }
+    });
+  }
+}
+const mapSelectEl = document.getElementById('mapSelect');
+if (mapSelectEl) {
+  mapSelectEl.addEventListener('change', async (e) => {
+    if (!hasFolder()) { logMsg('請先「選擇遊戲資料夾」。'); return; }
+    await loadMapFromFolder(parseInt((e.target as HTMLSelectElement).value) || 0);
+  });
+}
+const saveToGameBtn = document.getElementById('saveToGameBtn');
+if (saveToGameBtn) saveToGameBtn.addEventListener('click', () => { saveToGame(); });
+
+// 「自動」：把特殊數欄位設成自動推算值（最大特殊種類編號）
+const specialAutoBtn = document.getElementById('specialAutoBtn');
+if (specialAutoBtn) {
+  specialAutoBtn.addEventListener('click', () => {
+    if (!isSaveLoaded) { logMsg('尚未載入地圖。'); return; }
+    const n = autoSpecialCount();
+    const inp = document.getElementById('specialCountInput') as HTMLInputElement | null;
+    if (inp) inp.value = n.toString();
+    logMsg(`自動推算特殊地點數 = ${n}（最大有特殊種類的編號）。存檔時會寫入 [0x1098]。`);
+  });
+}
 
 // 初始化除錯與分析工具
 initDebugTools({
