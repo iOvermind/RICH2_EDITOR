@@ -183,6 +183,16 @@
         <button id="specialAutoBtn"
           class="btn-unified px-2 py-1 text-[10px] font-bold">自動</button>
       </div>
+      <div class="flex items-center gap-1">
+        <button id="undoBtn" disabled title="沒有可復原的動作"
+          class="btn-unified px-2 py-1.5 text-sm flex items-center disabled:opacity-30 disabled:cursor-not-allowed">
+          <span class="material-symbols-outlined text-sm">undo</span>
+        </button>
+        <button id="redoBtn" disabled title="沒有可重做的動作"
+          class="btn-unified px-2 py-1.5 text-sm flex items-center disabled:opacity-30 disabled:cursor-not-allowed">
+          <span class="material-symbols-outlined text-sm">redo</span>
+        </button>
+      </div>
       <button id="saveToGameBtn"
         class="btn-unified btn-primary px-3 py-1.5 text-sm font-bold uppercase tracking-wider flex items-center gap-1.5">
         <span class="material-symbols-outlined text-sm">save</span>儲存到遊戲
@@ -239,7 +249,15 @@
 
         <!-- 圖塊頁 -->
         <div id="tabTile" class="tab-pane">
-          <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider mb-3">點選圖塊立即生效</div>
+          <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1">點選圖塊立即生效</div>
+          <div class="text-[10px] text-on-surface-variant/70 leading-relaxed mb-2">
+            在地圖上<b class="text-primary">壓住左鍵拖曳</b>可一次選取多格，再點圖塊<b class="text-primary">一次套用到全部</b>。<br>
+            圖塊 <b>9~14</b> = 土地（自動配編號）、<b>1</b> = 購地標記（自動配 +950）。
+          </div>
+          <div class="text-[10px] mb-3 flex items-center gap-1.5">
+            <span class="text-on-surface-variant uppercase tracking-wider">已選取</span>
+            <span id="selectionLabel" class="font-bold text-on-surface-variant/50">尚未選取</span>
+          </div>
           <div id="tilePickerWrap" class="flex flex-wrap gap-1"></div>
         </div>
 
@@ -271,9 +289,9 @@
             <div class="flex gap-2">
               <input type="number" id="editSegId" min="0" max="99"
                 class="input-unified w-16 text-sm font-mono p-2">
-              <div id="segNameDisplay"
-                class="flex-1 bg-surface-container-lowest border-none p-2 text-xs text-tertiary flex items-center rounded-sm">
-              </div>
+              <input type="text" id="segNameDisplay" maxlength="8" placeholder="地段名稱"
+                title="遊戲畫面固定 3 個字寬。輸入 2 個字會自動在中間補全形空白（像原版的「中　環」），超過 3 個字會被截斷。"
+                class="input-unified flex-1 p-2 text-xs text-tertiary rounded-sm min-w-0">
               <button id="addSegBtn" title="新增地段"
                 class="btn-unified w-8 flex items-center justify-center transition-colors">
                 <span class="material-symbols-outlined text-[16px]">add</span>
@@ -281,46 +299,24 @@
             </div>
           </div>
 
-          <!-- UNK 9, A, B -->
+          <!-- 地段序號 / 往監獄 / 往醫院（UNK D、10~13 已確認三張圖全為 0＝未使用，已移除） -->
           <div class="grid grid-cols-3 gap-2">
             <div class="space-y-1.5">
-              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">未知 9 (UNK 9)</label>
+              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider"
+                title="同一地段內的第幾塊地（台北市第1/2/3塊）。選地段時自動填。">地段序號 (UNK 9)</label>
               <input type="number" id="editUnk9" min="0" max="65535"
                 class="input-unified w-full text-sm font-mono p-2">
             </div>
             <div class="space-y-1.5">
-              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">未知 A (UNK A)</label>
-              <input type="number" id="editUnkA" min="0" max="65535"
+              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider"
+                title="警車路由：從這格往監獄走的下一步方向。1=左 2=上 3=右 4=下，0=監獄入口格本身。用「重算路由」自動算。">往監獄 (UNK A)</label>
+              <input type="number" id="editUnkA" min="0" max="4"
                 class="input-unified w-full text-sm font-mono p-2">
             </div>
             <div class="space-y-1.5">
-              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">未知 B (UNK B)</label>
-              <input type="number" id="editUnkB" min="0" max="65535"
-                class="input-unified w-full text-sm font-mono p-2">
-            </div>
-            <div class="space-y-1.5">
-              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">未知 D (UNK D)</label>
-              <input type="number" id="editUnkD" min="0" max="65535"
-                class="input-unified w-full text-sm font-mono p-2">
-            </div>
-            <div class="space-y-1.5">
-              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">未知 10 (UNK 10)</label>
-              <input type="number" id="editUnk10" min="0" max="65535"
-                class="input-unified w-full text-sm font-mono p-2">
-            </div>
-            <div class="space-y-1.5">
-              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">未知 11 (UNK 11)</label>
-              <input type="number" id="editUnk11" min="0" max="65535"
-                class="input-unified w-full text-sm font-mono p-2">
-            </div>
-            <div class="space-y-1.5">
-              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">未知 12 (UNK 12)</label>
-              <input type="number" id="editUnk12" min="0" max="65535"
-                class="input-unified w-full text-sm font-mono p-2">
-            </div>
-            <div class="space-y-1.5">
-              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">未知 13 (UNK 13)</label>
-              <input type="number" id="editUnk13" min="0" max="65535"
+              <label class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider"
+                title="救護車路由：從這格往醫院走的下一步方向。1=左 2=上 3=右 4=下，0=醫院入口格本身。用「重算路由」自動算。">往醫院 (UNK B)</label>
+              <input type="number" id="editUnkB" min="0" max="4"
                 class="input-unified w-full text-sm font-mono p-2">
             </div>
           </div>
@@ -409,10 +405,17 @@
         <div id="tabWarn" class="tab-pane space-y-3">
           <div class="flex items-center justify-between gap-2">
             <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">點擊警告可跳至該格子</div>
-            <button id="repairMapBtn" title="自動修復可安全修復的問題（座標同步、清除孤兒記錄）"
-              class="btn-unified px-2 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 shrink-0">
-              <span class="material-symbols-outlined text-xs">healing</span>修復地圖
-            </button>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button id="recomputeRouteBtn"
+                title="檢查並修復 UNKA(往監獄)/UNKB(往醫院) 路由——警車、救護車、出獄出院的位移表。只修真正走不到的格子，其餘保留原版寫法。按住 Shift 點擊＝全部改成最短路。"
+                class="btn-unified px-2 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
+                <span class="material-symbols-outlined text-xs">route</span>修復路由
+              </button>
+              <button id="repairMapBtn" title="自動修復可安全修復的問題（座標同步、清除孤兒記錄）"
+                class="btn-unified px-2 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
+                <span class="material-symbols-outlined text-xs">healing</span>修復地圖
+              </button>
+            </div>
           </div>
           <div id="warnList" class="space-y-2 text-xs"></div>
         </div>
@@ -438,12 +441,20 @@
 
     <!-- 最右側邊欄：Console Log (固定在 Inspector 左側) -->
     <div class="w-72 bg-[#252526] flex flex-col border-l border-[#3c3c3c] shrink-0 z-30">
+      <!-- 格子資訊：點到哪格就顯示哪格，會整塊覆寫 -->
       <div class="px-4 py-3 border-b border-[#3c3c3c] bg-[#2d2d2d] shrink-0">
-        <h3 class="text-sm font-bold font-headline text-[#e5e2e1]">Console Log</h3>
+        <h3 class="text-sm font-bold font-headline text-[#e5e2e1]">格子資訊</h3>
       </div>
-      <!-- 把原本的 infoBox 放到這裡，並填滿剩餘高度 -->
+      <div id="cellInfo" class="p-4 font-mono text-xs text-[#9cdcfe] leading-relaxed shrink-0 border-b border-[#3c3c3c]">
+        尚未選取格子
+      </div>
+      <!-- 操作記錄：只會往下累加，不會被格子資訊洗掉 -->
+      <div class="px-4 py-2 border-b border-[#3c3c3c] bg-[#2d2d2d] shrink-0 flex items-center justify-between gap-2">
+        <h3 class="text-sm font-bold font-headline text-[#e5e2e1]">操作記錄</h3>
+        <button id="clearLogBtn" class="btn-unified px-2 py-0.5 text-[10px] shrink-0">清除</button>
+      </div>
       <div id="infoBox" class="flex-1 overflow-y-auto p-4 font-mono text-xs text-[#9cdcfe] leading-relaxed break-all">
-        等待點擊...
+        等待操作...
       </div>
     </div>
   </div>

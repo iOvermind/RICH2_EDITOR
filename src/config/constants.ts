@@ -42,33 +42,45 @@ export const palette: Uint8Array = new Uint8Array([
     0, 12, 210, 0, 0, 202, 255, 223, 0, 255, 255, 0, 255, 255, 182, 255, 235, 0, 255, 202, 0, 49, 178, 255
 ]);
 
+// 圖塊語意（三張原版圖實測，零例外）：
+//   圖塊 9~14 = 可買賣的土地格（每一格都有地段；台灣用 9/10/13，香港 9/10/13/14，城 9~14 全用）
+//   圖塊 1    = 該土地的購地標記，locId = 土地 locId + 950，緊貼土地格
+//   兩者數量嚴格 1:1（台灣 69、香港 90、城 232），且反向也成立：
+//   有地段的格子必用 9~14、+950 標記格必用圖塊 1。純道路與特殊地點用 >20 的專屬圖塊。
+export const LAND_TILES: readonly number[] = [9, 10, 11, 12, 13, 14];
+export const MARKER_TILE: number = 1;
+export const MARKER_ID_OFFSET: number = 950;
+
 // 價格表欄位定義
 export const PRICE_FIELD_COUNT: number = 10;
 export const PRICE_SEG_COUNT: number = 45;
 export const PRICE_FIELD_SIZE: number = PRICE_SEG_COUNT * 2;
 export const PRICE_FIELDS: string[] = ['土地價格', '增值價格', '空地過路費', '一層過路費', '二層過路費', '三層過路費', '四層過路費', '五層過路費', '欄位8', '欄位9'];
 
-// 地點資訊
+// 地點資訊：20 個欄位，每個欄位是 283 筆 uint16 的陣列（欄位間隔 0x236 = 283*2）
 export const LOC_COUNT: number = 283;
 export const LOC_FIELDS = {
-    X: 0x0000,       // #00
-    Y: 0x0236,       // #01
-    SPECIAL: 0x046C, // #02
-    UNK3: 0x06A2,    // #03 - 不明
-    LEFT: 0x08D8,    // #04
-    UP: 0x0B0E,      // #05
-    RIGHT: 0x0D44,   // #06
-    DOWN: 0x0F7A,    // #07
-    SEGMENT: 0x11B0, // #08
-    UNK9: 0x13E6,    // #09 - 不明 (你說它是序號)
-    UNKA: 0x161C,    // #0A - 不明
-    UNKB: 0x1852,    // #0B - 不明
-    OWNER: 0x1A88,   // #0C
-    UNKD: 0x1CBE,    // #0D - 不明
-    RESERVE: 0x1EF4, // #0E
-    HOUSE: 0x212A,   // #0F
-    UNK10: 0x2360,   // #10 - 不明
-    UNK11: 0x2596,   // #11 - 不明
-    UNK12: 0x27CC,   // #12 - 不明
-    UNK13: 0x2A02    // #13 - 不明
+    X: 0x0000,       // #00 左上角格子 X
+    Y: 0x0236,       // #01 左上角格子 Y
+    SPECIAL: 0x046C, // #02 特殊種類 1~10（0=土地/公園）
+    UNK3: 0x06A2,    // #03 從走道格看，土地建築在哪個方向（土地特有）
+    LEFT: 0x08D8,    // #04 往左走會到的地點編號
+    UP: 0x0B0E,      // #05 往上
+    RIGHT: 0x0D44,   // #06 往右
+    DOWN: 0x0F7A,    // #07 往下
+    SEGMENT: 0x11B0, // #08 地段編號
+    UNK9: 0x13E6,    // #09 同地段內的第幾塊地（1,2,3…）
+    UNKA: 0x161C,    // #0A 往監獄走的下一步方向（警車路由；1左2上3右4下，0=監獄入口格）
+    UNKB: 0x1852,    // #0B 往醫院走的下一步方向（救護車路由；同上編碼）
+    OWNER: 0x1A88,   // #0C 所屬玩家
+    UNKD: 0x1CBE,    // #0D ⚠ 未使用
+    RESERVE: 0x1EF4, // #0E 被預約的玩家
+    HOUSE: 0x212A,   // #0F 房屋級數
+    UNK10: 0x2360,   // #10 ⚠ 未使用
+    UNK11: 0x2596,   // #11 ⚠ 未使用
+    UNK12: 0x27CC,   // #12 ⚠ 未使用
+    UNK13: 0x2A02    // #13 ⚠ 未使用
 };
+// ⚠ UNKD / UNK10~13：實測 rich2 的 9 個 DSK（三張原版圖 + 6 個存檔槽）全部 283 個記錄槽
+// 皆為 0，確定是保留欄位。編輯器 UI 已移除這五個欄位，但**偏移量必須留著** ——
+// isActive()/renameLocation() 會走訪 Object.values(LOC_FIELDS)，而且這裡也是檔案格式的文件。

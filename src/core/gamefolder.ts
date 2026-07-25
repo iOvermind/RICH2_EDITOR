@@ -20,7 +20,7 @@ export const MAPS: MapDef[] = [
 
 const EXE_NAME = 'Run.exe';
 const EXE_BAK = 'Run.exe.bak';
-const MAXLOC_TARGET = 282; // 三張圖 maxLocId 統一開到 282（loc 陣列上限 283）
+export const MAXLOC_TARGET = 282; // 三張圖 maxLocId 統一開到 282（loc 陣列上限 283）
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let dirHandle: any = null;
@@ -56,9 +56,28 @@ async function fileExists(name: string): Promise<boolean> {
     try { await dirHandle.getFileHandle(name); return true; } catch { return false; }
 }
 
-/** 寫入（覆蓋）資料夾內某檔。 */
-export async function writeFile(name: string, data: ArrayBuffer | Uint8Array): Promise<void> {
+/**
+ * 寫入（覆蓋）資料夾內某檔。
+ * 第一次覆蓋前會自動備份成 `<檔名>.bak`（已存在就不再覆蓋，保住最原始那份）。
+ * 這件事很重要：DSK/PAK 一旦被編輯器覆寫就回不去了，而遊戲原版檔通常沒有別的來源。
+ */
+export async function writeFile(
+    name: string, data: ArrayBuffer | Uint8Array, onLog?: (m: string) => void,
+): Promise<void> {
     if (!dirHandle) throw new Error('尚未選擇遊戲資料夾');
+
+    const bak = name + '.bak';
+    if (!(await fileExists(bak))) {
+        try {
+            const original = await readFile(name);          // 讀得到才備份（新建檔案就沒有原版）
+            const bh = await dirHandle.getFileHandle(bak, { create: true });
+            const bw = await bh.createWritable();
+            await bw.write(original);
+            await bw.close();
+            if (onLog) onLog(`已備份原始 ${name} → ${bak}`);
+        } catch { /* 原檔不存在＝新建，不需要備份 */ }
+    }
+
     const fh = await dirHandle.getFileHandle(name, { create: true });
     const w = await fh.createWritable();
     await w.write(data);
@@ -71,6 +90,19 @@ export async function readSpecialCount(mapIndex: number): Promise<number> {
     if (!m) throw new Error('無效地圖');
     const raw = new Uint8Array(await readFile(EXE_NAME));
     return new DataView(raw.buffer).getUint16(m.exeSpecialOffset, true);
+}
+
+export interface MapCaps { name: string; maxLoc: number; special: number }
+
+/** 讀出 Run.exe 目前三張圖的容量設定，用來回報「現在到底是什麼狀態」。 */
+export async function readCaps(): Promise<MapCaps[]> {
+    const raw = new Uint8Array(await readFile(EXE_NAME));
+    const dv = new DataView(raw.buffer);
+    return MAPS.map(m => ({
+        name: m.name,
+        maxLoc: dv.getUint16(m.exeMaxLocOffset, true),
+        special: dv.getUint16(m.exeSpecialOffset, true),
+    }));
 }
 
 /**

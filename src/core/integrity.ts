@@ -1,7 +1,7 @@
 // src/core/integrity.ts
 // 地圖結構完整性：偵測 + 修復引擎要求的不變式。
 // 純函式，瀏覽器 (main.ts) 與 node 測試共用。
-import { GRID_COLS, GRID_ROWS, LOC_COUNT, LOC_FIELDS, PRICE_SEG_COUNT } from '../config/constants';
+import { GRID_COLS, GRID_ROWS, LOC_COUNT, LOC_FIELDS, PRICE_SEG_COUNT, MARKER_ID_OFFSET } from '../config/constants';
 
 // 地點編號絕對上限（LOC_COUNT=283 → 合法 index 0..282）。>950 是 +950 購地標記，不算路徑地點。
 export const MAX_LOC_ID = LOC_COUNT - 1;
@@ -11,15 +11,16 @@ export interface Dir {
     opp: number;     // 相反方向欄位
     dx: number;
     dy: number;
+    code: number;    // 引擎方向代碼：1=左 2=上 3=右 4=下（UNKA/UNKB 用的就是這個）
     name: string;
 }
 
 // 四方向（含相反方向與 grid 位移）
 export const DIRS: Dir[] = [
-    { field: LOC_FIELDS.LEFT, opp: LOC_FIELDS.RIGHT, dx: -1, dy: 0, name: '左' },
-    { field: LOC_FIELDS.RIGHT, opp: LOC_FIELDS.LEFT, dx: 1, dy: 0, name: '右' },
-    { field: LOC_FIELDS.UP, opp: LOC_FIELDS.DOWN, dx: 0, dy: -1, name: '上' },
-    { field: LOC_FIELDS.DOWN, opp: LOC_FIELDS.UP, dx: 0, dy: 1, name: '下' },
+    { field: LOC_FIELDS.LEFT, opp: LOC_FIELDS.RIGHT, dx: -1, dy: 0, code: 1, name: '左' },
+    { field: LOC_FIELDS.RIGHT, opp: LOC_FIELDS.LEFT, dx: 1, dy: 0, code: 3, name: '右' },
+    { field: LOC_FIELDS.UP, opp: LOC_FIELDS.DOWN, dx: 0, dy: -1, code: 2, name: '上' },
+    { field: LOC_FIELDS.DOWN, opp: LOC_FIELDS.UP, dx: 0, dy: 1, code: 4, name: '下' },
 ];
 
 // 注意：大富翁的移動是「有向路徑圖」，允許路口/岔路（多條路匯入同一格），
@@ -32,6 +33,8 @@ export type IssueKind =
     | 'dangling-ref'     // 某方向指標指向一個不在 grid 上的編號
     | 'dup-coord'        // 兩個 active 地點共用同一 X,Y
     | 'partition'        // 特殊種類掛在道路/土地編號上（或反之）
+    | 'land-no-segment'  // 土地編號(≥51)卻沒設地段（買不了、沒價格）
+    | 'route-entry'      // UNKA/UNKB=0 的入口格不是剛好一個（0 是入口格專屬標記）
     | 'dead-end'         // grid 上路徑地點的方向連結數 < 2（玩家會走不動）
     | 'zero-price';      // 土地(seg>0)的地段買價 = 0（引擎可能除以 0）
 
@@ -143,6 +146,15 @@ export function analyzeIntegrity(grid: Uint16Array, dv: DataView, boundary: numb
             });
         }
 
+        // 土地編號一定要有地段：實測三張原版圖「編號 ≥51 ⟺ 有地段」零例外。
+        // 貼了土地圖塊、配到編號卻沒選地段，遊戲裡會變成買不了、也沒有價格的死格。
+        if (id >= LAND_ID_START && seg === 0) {
+            issues.push({
+                kind: 'land-no-segment', locId: id,
+                detail: `土地 ${id} 還沒設定地段 → 買不了也沒有價格，請在編輯面板的「地段」欄選一個`,
+            });
+        }
+
         // 懸空指標：某方向指到一個不在 grid 上的編號（會讓移動引擎走進幽靈地點）
         let dirCount = 0;
         for (const d of DIRS) {
@@ -164,6 +176,37 @@ export function analyzeIntegrity(grid: Uint16Array, dv: DataView, boundary: numb
             const basePrice = priceDv.getUint16(seg * 2, true); // 欄位0=土地價格，offset 0
             if (basePrice === 0) {
                 issues.push({ kind: 'zero-price', locId: id, detail: `地點 ${id} 的地段 ${seg} 土地買價為 0` });
+            }
+        }
+    }
+
+    // 路由入口格：全圖應該剛好各有一個 UNKA=0（監獄入口）與 UNKB=0（醫院入口），
+    // 三張原版圖皆如此。多出來的幾乎都是「手動配了新編號但沒設路由」的格子 ——
+    // 那格會被誤認成入口，警車/救護車的接力鏈走到它就結束了。
+    for (const [field, name, what] of [
+        [LOC_FIELDS.UNKA, 'UNKA', '監獄'],
+        [LOC_FIELDS.UNKB, 'UNKB', '醫院'],
+    ] as const) {
+        const zeros: number[] = [];
+        for (const [id] of cellMap) {
+            if (id <= 0 || id > MAX_LOC_ID) continue;
+            if (getF(dv, field, id) === 0) zeros.push(id);
+        }
+        zeros.sort((a, b) => a - b);
+        if (zeros.length === 0) {
+            issues.push({
+                kind: 'route-entry', locId: 0,
+                detail: `找不到往${what}的入口格（沒有任何地點的 ${name}=0），警車/救護車路由無法運作`,
+            });
+        } else if (zeros.length > 1) {
+            const keep = zeros.find(id => id <= boundary) ?? zeros[0];
+            for (const id of zeros) {
+                if (id === keep) continue;
+                issues.push({
+                    kind: 'route-entry', locId: id,
+                    detail: `地點 ${id} 的 ${name}=0，但全圖只該有一個往${what}的入口格（${keep}）；` +
+                        `這格的路由沒設定，警車/救護車走到這裡會斷掉。按「修復路由」可自動補上`,
+                });
             }
         }
     }
@@ -209,16 +252,292 @@ export function renameLocation(grid: Uint16Array, dv: DataView, oldId: number, n
     return true;
 }
 
-/** 在道路/土地分區 (boundary+1..maxLoc) 找一個「記錄空、grid 空、標記槽(+950)也空」的自由編號。找不到回 -1。 */
+// 原版三張圖的土地一律從 51 起編，40~50 這段整段刻意不用（台灣/香港缺 40-50、城缺 41-50）。
+// 為免踩到引擎可能對 50 以下另有處理的地雷，配號一律從 51 開始。
+export const LAND_ID_START = 51;
+
+/** 某編號是否完全沒被用（記錄空、grid 空、標記槽 +950 也空）。 */
+function isFreeLandId(cm: Map<number, number[]>, dv: DataView, id: number): boolean {
+    return !isActive(dv, id) && !cm.has(id) && !cm.has(id + MARKER_ID_OFFSET);
+}
+
+/** 在道路/土地分區 (51..maxLoc) 找一個自由編號（由小到大補空號）。找不到回 -1。 */
 export function findFreeLandId(grid: Uint16Array, dv: DataView, boundary: number, maxLoc: number = MAX_LOC_ID): number {
     const cm = buildCellMap(grid);
-    for (let id = boundary + 1; id <= maxLoc; id++) {
-        if (isActive(dv, id)) continue;
-        if (cm.has(id)) continue;
-        if (cm.has(id + 950)) continue;
-        return id;
+    for (let id = Math.max(boundary + 1, LAND_ID_START); id <= maxLoc; id++) {
+        if (isFreeLandId(cm, dv, id)) return id;
     }
     return -1;
+}
+
+/**
+ * 下一個土地編號：從「目前最大編號 + 1」開始配，接續在既有編號之後。
+ * 配到上限才回頭撿中間的空號（findFreeLandId）。找不到回 -1。
+ */
+export function nextLandId(grid: Uint16Array, dv: DataView, boundary: number = 49, maxLoc: number = MAX_LOC_ID): number {
+    const cm = buildCellMap(grid);
+    let max = 0;
+    for (const [id] of cm) if (id > 0 && id <= maxLoc && id > max) max = id;
+    for (let id = 1; id <= maxLoc; id++) if (isActive(dv, id) && id > max) max = id;
+    for (let id = Math.max(max + 1, LAND_ID_START); id <= maxLoc; id++) {
+        if (isFreeLandId(cm, dv, id)) return id;
+    }
+    return findFreeLandId(grid, dv, boundary, maxLoc);
+}
+
+export interface MarkerBaseResult {
+    base: number;        // 該用哪個土地的編號當 base（-1 = 找不到）
+    free: number[];      // 相鄰、且 +950 槽還空著的土地
+    taken: number[];     // 相鄰、但 +950 已經被別的格子佔走的土地
+    self: number;        // 這格目前已經是某個 base 的標記（-1 = 否）
+}
+
+/**
+ * 幫一格「購地標記」找它該屬於哪塊土地。
+ * 規則：掃四鄰的土地格(編號 ≥51)，排除 +950 槽已被別的格子佔走的，
+ * 剩下的優先取 preferred（剛新增的那塊），否則取編號最大的（新增的地編號一定最大）。
+ */
+export function findMarkerBase(
+    grid: Uint16Array, gx: number, gy: number, preferred: number = -1, maxLoc: number = MAX_LOC_ID,
+): MarkerBaseResult {
+    const cm = buildCellMap(grid);
+    const here = gy * GRID_COLS + gx;
+    const free: number[] = [], taken: number[] = [];
+    let self = -1;
+
+    for (const d of DIRS) {
+        const nx = gx + d.dx, ny = gy + d.dy;
+        if (nx < 0 || nx >= GRID_COLS || ny < 0 || ny >= GRID_ROWS) continue;
+        const id = grid[ny * GRID_COLS + nx];
+        if (id < LAND_ID_START || id > maxLoc) continue;      // 只有土地分區的編號能當 base
+        if (free.includes(id) || taken.includes(id)) continue;
+
+        const cells = cm.get(id + MARKER_ID_OFFSET);
+        if (!cells) { free.push(id); continue; }
+        // 標記已存在：若就是這一格，代表本來就配好了，不算被佔走
+        if (cells.length === 1 && cells[0] === here) { self = id; free.push(id); }
+        else taken.push(id);
+    }
+
+    let base = -1;
+    if (self >= 0) base = self;
+    else if (free.length > 0) base = free.includes(preferred) ? preferred : Math.max(...free);
+    return { base, free, taken, self };
+}
+
+// ============================================================================
+// UNKA / UNKB 路由重算
+// ----------------------------------------------------------------------------
+// UNKA = 該格「往監獄走的下一步方向」，UNKB = 「往醫院走的下一步方向」（代碼 1左2上3右4下）。
+// 警車載去監獄、救護車載去醫院、出獄/出院的位移都走這兩張表。全圖唯一 UNKA=0 的格子
+// 就是監獄入口格、唯一 UNKB=0 的就是醫院入口格（監獄/醫院本身是 exe 寫死的位置，
+// 地圖上只是底圖，不是特殊種類）。
+//
+// 新增土地若這兩欄沒指對，警車/救護車經過它就會亂走 —— 這是「特殊移動 bug」的根因。
+// 修法：以入口格為起點做反向 BFS，算出每格往入口的最短路第一步。
+// ============================================================================
+
+/** 路由起點候選。正常地圖各只會有一個。 */
+export function findRoutingEntries(grid: Uint16Array, dv: DataView): { jail: number[]; hospital: number[] } {
+    const jail: number[] = [], hospital: number[] = [];
+    for (const [id] of buildCellMap(grid)) {
+        if (id <= 0 || id > MAX_LOC_ID) continue;   // >950 的購地標記不參與路由
+        if (getF(dv, LOC_FIELDS.UNKA, id) === 0) jail.push(id);
+        if (getF(dv, LOC_FIELDS.UNKB, id) === 0) hospital.push(id);
+    }
+    jail.sort((a, b) => a - b);
+    hospital.sort((a, b) => a - b);
+    return { jail, hospital };
+}
+
+/**
+ * 從候選中挑真正的入口格：入口格一定在特殊分區（編號 ≤ boundary，如台灣監獄入口 id13、醫院 id20），
+ * 新增土地誤觸的 0 值編號都 > boundary，所以優先取特殊分區內最小的編號。
+ */
+function pickEntry(cands: number[], boundary: number): number {
+    if (cands.length === 0) return -1;
+    const inSpecial = cands.filter(id => id <= boundary);
+    return (inSpecial.length > 0 ? inSpecial : cands)[0];
+}
+
+/** 反向 BFS：算出每格「往 entry 走的下一步方向代碼」與到 entry 的步數。 */
+function routeToward(grid: Uint16Array, dv: DataView, entry: number): { dir: Map<number, number>; dist: Map<number, number> } {
+    const nodes: number[] = [];
+    for (const [id] of buildCellMap(grid)) if (id > 0 && id <= MAX_LOC_ID) nodes.push(id);
+    const onGrid = new Set(nodes);
+
+    // 反向鄰接表：rev[T] = [{from, code}]，代表 from 往 code 方向會走到 T
+    const rev = new Map<number, { from: number; code: number }[]>();
+    for (const id of nodes) {
+        for (const d of DIRS) {
+            const t = getF(dv, d.field, id);
+            if (t === 0 || !onGrid.has(t)) continue;   // 懸空指標略過（由 dangling-ref 檢查負責）
+            let a = rev.get(t); if (!a) { a = []; rev.set(t, a); }
+            a.push({ from: id, code: d.code });
+        }
+    }
+
+    const dist = new Map<number, number>(), dir = new Map<number, number>();
+    if (!onGrid.has(entry)) return { dir, dist };
+    dist.set(entry, 0); dir.set(entry, 0);
+    const q = [entry];
+    for (let qi = 0; qi < q.length; qi++) {
+        const cur = q[qi], dcur = dist.get(cur)!;
+        for (const e of rev.get(cur) || []) {
+            if (dist.has(e.from)) continue;
+            dist.set(e.from, dcur + 1);
+            dir.set(e.from, e.code);
+            q.push(e.from);
+        }
+    }
+    return { dir, dist };
+}
+
+const DIR_BY_CODE = new Map<number, Dir>(DIRS.map(d => [d.code, d]));
+
+/**
+ * 沿著 field 指定的方向一步步走，回傳到 entry 的步數；-1 = 繞圈或斷線（不收斂）。
+ * 這是 UNKA/UNKB 真正的不變式：**走得到**才是對的，不一定要最短。
+ * （實測原版就有不少格子刻意不走最短路，但都收斂；反之新增土地沒設好就會斷在那格。）
+ */
+function walkTo(dv: DataView, field: number, start: number, entry: number, onGrid: Set<number>, limit: number): number {
+    let cur = start;
+    const seen = new Set<number>();
+    for (let step = 0; step <= limit; step++) {
+        if (cur === entry) return step;
+        if (seen.has(cur)) return -1;
+        seen.add(cur);
+        const d = DIR_BY_CODE.get(getF(dv, field, cur));
+        if (!d) return -1;                              // 方向碼無效（非 1~4）
+        const nxt = getF(dv, d.field, cur);
+        if (!nxt || !onGrid.has(nxt)) return -1;        // 那個方向根本沒路
+        cur = nxt;
+    }
+    return -1;
+}
+
+export type RouteMode =
+    | 'repair'    // 只改「目前走不到入口」的格子（預設，最貼近原版）
+    | 'rebuild';  // 全部改寫成最短路（會偏離原版寫法，通常不需要）
+
+interface RouteApplyResult {
+    changed: number[];       // 實際被改寫的格子
+    unreachable: number[];   // 路徑圖上根本連不到入口（路沒接好，本函式修不了）
+    stillBroken: number[];   // 改完仍不收斂
+    brokenBefore: number[];  // 動手前就不收斂的格子
+    nonShortest: number[];   // 收斂但不是最短路（原版風格，repair 模式不動它）
+}
+
+function applyRoute(
+    dv: DataView, field: number, nodes: number[], entry: number,
+    r: { dir: Map<number, number>; dist: Map<number, number> },
+    mode: RouteMode, force: Set<number>,
+): RouteApplyResult {
+    const onGrid = new Set(nodes);
+    const limit = nodes.length + 2;
+    const res: RouteApplyResult = { changed: [], unreachable: [], stillBroken: [], brokenBefore: [], nonShortest: [] };
+
+    for (const id of nodes) {
+        if (!r.dist.has(id)) res.unreachable.push(id);
+        if (walkTo(dv, field, id, entry, onGrid, limit) < 0) res.brokenBefore.push(id);
+        else {
+            const dist = r.dist.get(id);
+            const cd = DIR_BY_CODE.get(getF(dv, field, id));
+            if (dist !== undefined && dist > 0 && cd) {
+                const nxt = r.dist.get(getF(dv, cd.field, id));
+                if (nxt === undefined || nxt !== dist - 1) res.nonShortest.push(id);
+            }
+        }
+    }
+
+    // 由近到遠處理：修好靠近入口的格子，往往連下游一整串都跟著救回來
+    const order = nodes.filter(id => r.dist.has(id)).sort((a, b) => r.dist.get(a)! - r.dist.get(b)!);
+    for (const id of order) {
+        const want = r.dir.get(id)!;
+        const cur = getF(dv, field, id);
+        if (mode === 'repair') {
+            // force 裡的是「剛建立的新格子」：它沒有原作者的設計意圖要保留，
+            // 就算目前的佔位值碰巧走得通，也要換成真正算出來的最短路。
+            if (!force.has(id) && walkTo(dv, field, id, entry, onGrid, limit) >= 0) continue;
+        } else {
+            const dist = r.dist.get(id)!;
+            const cd = DIR_BY_CODE.get(cur);
+            if (cd && dist > 0) {                                            // 現值已是最短路 → 保留原版選擇
+                const nxt = r.dist.get(getF(dv, cd.field, id));
+                if (nxt !== undefined && nxt === dist - 1) continue;
+            }
+        }
+        if (cur !== want) { setF(dv, field, id, want); res.changed.push(id); }
+    }
+
+    for (const id of nodes) if (walkTo(dv, field, id, entry, onGrid, limit) < 0) res.stillBroken.push(id);
+    return res;
+}
+
+export interface RoutingReport {
+    ok: boolean;
+    error?: string;
+    mode: RouteMode;
+    jailEntry: number;
+    hospitalEntry: number;
+    ambiguousJail: number[];      // 不只一個 UNKA=0 候選時列出（已自動挑一個）
+    ambiguousHospital: number[];
+    total: number;                // 參與路由的格子數
+    a: RouteApplyResult;          // UNKA（往監獄）
+    b: RouteApplyResult;          // UNKB（往醫院）
+}
+
+const EMPTY_APPLY: RouteApplyResult = { changed: [], unreachable: [], stillBroken: [], brokenBefore: [], nonShortest: [] };
+
+/**
+ * 掃描全圖並修正 UNKA/UNKB。只動編號 1..282 且在 grid 上的路徑地點（特殊地點也有這兩欄）；
+ * +950 購地標記不在 loc 陣列內，天然排除。
+ * mode='repair'（預設）只改走不到入口的格子；'rebuild' 才全面改成最短路。
+ * dryRun=true 只回報不寫入。
+ */
+export function recomputeRouting(
+    grid: Uint16Array,
+    dv: DataView,
+    opts: {
+        jailEntry?: number; hospitalEntry?: number; boundary?: number;
+        dryRun?: boolean; mode?: RouteMode;
+        /** 這些地點一律重算（給剛建立的新格子用，不保留碰巧能通的佔位值）。 */
+        forceIds?: number[];
+    } = {},
+): RoutingReport {
+    const boundary = opts.boundary ?? 49;
+    const mode: RouteMode = opts.mode ?? 'repair';
+    const force = new Set(opts.forceIds ?? []);
+    const ents = findRoutingEntries(grid, dv);
+    const jailEntry = opts.jailEntry ?? pickEntry(ents.jail, boundary);
+    const hospEntry = opts.hospitalEntry ?? pickEntry(ents.hospital, boundary);
+
+    const nodes: number[] = [];
+    for (const [id] of buildCellMap(grid)) if (id > 0 && id <= MAX_LOC_ID) nodes.push(id);
+    nodes.sort((a, b) => a - b);
+
+    const base: RoutingReport = {
+        ok: false, mode, jailEntry, hospitalEntry: hospEntry,
+        ambiguousJail: ents.jail.length > 1 ? ents.jail : [],
+        ambiguousHospital: ents.hospital.length > 1 ? ents.hospital : [],
+        total: nodes.length, a: EMPTY_APPLY, b: EMPTY_APPLY,
+    };
+    if (jailEntry < 0) return { ...base, error: '找不到監獄入口格（沒有任何格子的 UNKA=0）' };
+    if (hospEntry < 0) return { ...base, error: '找不到醫院入口格（沒有任何格子的 UNKB=0）' };
+
+    const ra = routeToward(grid, dv, jailEntry);
+    const rb = routeToward(grid, dv, hospEntry);
+
+    // dryRun 在副本上跑，原始資料一個位元組都不動
+    const target = opts.dryRun
+        ? new DataView(dv.buffer.slice(0) as ArrayBuffer, dv.byteOffset, dv.byteLength)
+        : dv;
+
+    return {
+        ...base, ok: true,
+        a: applyRoute(target, LOC_FIELDS.UNKA, nodes, jailEntry, ra, mode, force),
+        b: applyRoute(target, LOC_FIELDS.UNKB, nodes, hospEntry, rb, mode, force),
+    };
 }
 
 /**
