@@ -81,14 +81,7 @@ canvas {
 }
 
 /* ★ 解決你的痛點：給 infoBox 固定最大高度跟內捲軸 ★ */
-#infoBox {
-  margin-top: 8px;
-  max-height: 150px;
-  overflow-y: auto;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #9cdcfe;
-}
+
 
 /* 右中：編輯區，霸佔剩下的所有空間，內容太多就內部捲動！ */
 .edit-block {
@@ -113,43 +106,49 @@ canvas {
    被誤殺的內部元件 UI (頁籤、圖塊、方向鍵)
    ========================================= */
 
-/* 1. 頁籤切換系統復活 */
+/* 1. 頁籤切換系統復活 (傳統樣式) */
 .tab-bar {
   display: flex;
-  background: #2d2d2d;
-  border-bottom: 1px solid #0e639c;
-  border-radius: 4px 4px 0 0;
-  overflow: hidden;
+  background-color: #252526;
+  border-bottom: 1px solid #444;
+  padding-top: 6px;
+  padding-left: 6px;
 }
 
 .tab-btn {
   flex: 1;
-  padding: 6px;
   text-align: center;
-  cursor: pointer;
+  padding: 6px 0;
+  background-color: #2d2d2d;
   color: #888;
-  font-size: 13px;
-  border-right: 1px solid #3c3c3c;
+  border: 1px solid #444;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  margin-right: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
   user-select: none;
+  transition: background-color 0.15s;
 }
 
-.tab-btn:last-child {
-  border-right: none;
+.tab-btn:hover {
+  background-color: #333;
+  color: #ccc;
 }
 
 .tab-btn.active {
-  background: #0e639c;
-  color: #fff;
+  background-color: #1e1e1e; /* 配合底下的 panel 背景色 (#1e1e1e 或 #1b1b1c) */
+  color: #e5e2e1;
+  border-bottom: 1px solid #1e1e1e; /* 覆蓋掉 .tab-bar 的底線 */
+  margin-bottom: -1px;
 }
 
 .tab-pane {
   display: none;
-  /* 隱藏非作用中的頁籤內容 */
 }
-
 .tab-pane.active {
   display: block;
-  /* 顯示作用中的頁籤內容 */
 }
 
 /* 2. 圖塊排版復活 (讓它變成多欄網格) */
@@ -177,7 +176,7 @@ canvas {
   height: 40px !important;
   padding: 0 !important;
   line-height: 40px;
-  font-size: 12px !important;
+  font-size: 12px;
   text-align: center;
 
   /* 標準屬性放在後面 */
@@ -240,15 +239,11 @@ td input[type="number"] {
 }
 
 /* 調整地圖容器位置，往上移一點避開左下角 */
-main.grid-canvas {
-  align-items: flex-start;
-  /* 讓地圖靠上 */
-  padding-top: 40px;
-}
+
 
 /* 統一調整 Inspector 標籤大小 */
 label {
-  font-size: 12px !important;
+  font-size: 12px;
   /* 稍微放大 label，不然眼睛會瞎 */
   letter-spacing: 0.05em;
 }
@@ -290,4 +285,61 @@ label {
 
   /* 確保背景不會滲出色塊 */
   background-clip: padding-box;
+}
+
+/* =========================================
+   Unified UI Components (Buttons & Selects)
+   ========================================= */
+.btn-unified {
+  font-size: 14px;
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #e5e2e1;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.btn-unified:hover {
+  background-color: #3a3a3a;
+  border-color: #666;
+}
+.btn-primary {
+  background-color: #007acc;
+  border: 1px solid #005f9e;
+  color: #fff;
+}
+.btn-primary:hover {
+  background-color: #008be6;
+  border-color: #007acc;
+}
+
+.select-unified {
+  font-size: 14px;
+  background-color: #1c1c1c;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #e5e2e1;
+  padding-right: 8px;
+  transition: border-color 0.15s;
+}
+.select-unified:hover, .select-unified:focus {
+  border-color: #666;
+  outline: none;
+}
+.select-unified option {
+  background-color: #1c1c1c;
+  color: #e5e2e1;
+}
+
+.input-unified {
+  font-size: 14px;
+  background-color: #141414;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #e5e2e1;
+  transition: border-color 0.15s;
+}
+.input-unified:focus {
+  border-color: #007acc;
+  outline: none;
 }
