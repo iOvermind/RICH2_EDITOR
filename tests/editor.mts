@@ -264,7 +264,9 @@ console.log('\n=== 5c. 地段名稱排版（改名要照原版格式）===');
 // 用 SPECIAL>0 會把結尾的公園漏掉（大富翁城的 40 號）。
 console.log('\n=== 6. 特殊地點數（[0x1098]）推算 ===');
 {
-  const exe = fs.readFileSync(`${LIVE}/Run.exe`);
+  // 原版圖要跟「原版 exe」比；活的地圖才跟「目前的 exe」比。
+  const exeOrig = fs.readFileSync(`${R}/Run.exe`);
+  const exeLive = fs.readFileSync(`${LIVE}/Run.exe`);
   const cases = [
     { name: '台灣', dsk: 'Save_7', pak: 'Part1', off: 0x124b0 },
     { name: '台灣(當前地圖)', dsk: 'Save_7', pak: 'Part1', off: 0x124b0, live: true },
@@ -282,8 +284,8 @@ console.log('\n=== 6. 特殊地點數（[0x1098]）推算 ===');
     let bySpecialFlag = 0;
     for (const [id] of cnt) if (dv.getUint16(LOC_FIELDS.SPECIAL + id * 2, true) > 0 && id > bySpecialFlag) bySpecialFlag = id;
 
-    const want = exe.readUInt16LE(c.off);
     const live = (c as { live?: boolean }).live === true;
+    const want = (live ? exeLive : exeOrig).readUInt16LE(c.off);
 
     // 原版圖：推算值必須等於 exe。使用者當前的地圖會領先 exe（改了地圖還沒存回），
     // 所以只驗結構規則，並把差異印出來當提醒。
@@ -310,13 +312,25 @@ console.log('\n=== 7. Run.exe patch 狀態 ===');
 {
   const cur = fs.readFileSync(`${LIVE}/Run.exe`);
   const bak = fs.readFileSync(`${LIVE}/Run.exe.bak`);
-  for (const [name, off] of [['台灣', 0x124aa], ['香港', 0x124c4], ['大富翁城', 0x124de]] as const) {
-    eq(`${name} maxLocId 已 patch 成 282`, cur.readUInt16LE(off), 282);
+  // maxLocId 只要 ≥ 該圖實際用到的最大編號即可（不必一律 282；開太大會讓引擎把空記錄也當合法地點）
+  for (const [name, off, dsk, pak, live] of [
+    ['台灣', 0x124aa, 'Save_7', 'Part1', true],
+    ['香港', 0x124c4, 'Save_8', 'Part2', false],
+    ['大富翁城', 0x124de, 'Save_9', 'Part3', false],
+  ] as const) {
+    const { grid } = load(`${live ? LIVE : R}/${dsk}.dsk`, `${live ? LIVE : R}/${pak}.pak`);
+    let maxUsed = 0;
+    for (const v of grid) if (v > 0 && v <= MAX_LOC_ID && v > maxUsed) maxUsed = v;
+    const val = cur.readUInt16LE(off);
+    check(`${name} maxLocId(${val}) ≥ 實際最大編號(${maxUsed})`, val >= maxUsed, `不足`);
+    check(`${name} maxLocId 不超過陣列上限 282`, val <= 282, `val=${val}`);
   }
   const diff: number[] = [];
   for (let i = 0; i < Math.min(cur.length, bak.length); i++) if (cur[i] !== bak[i]) diff.push(i);
-  check(`與備份只差 4 bytes（僅 maxLocId，未動玩家數/特殊數）`, diff.length === 4,
-    `差異 ${diff.length} 處：${diff.map(o => '0x' + o.toString(16)).join(',')}`);
+  const allowed = new Set([0x124aa, 0x124ab, 0x124c4, 0x124c5, 0x124de, 0x124df,
+                           0x124b0, 0x124b1, 0x124ca, 0x124cb, 0x124e4, 0x124e5]);
+  check('與備份的差異只落在 maxLocId / 特殊數欄位（沒動到玩家數或其他程式碼）',
+    diff.every(o => allowed.has(o)), `差異位置 ${diff.map(o => '0x' + o.toString(16)).join(',')}`);
   eq('檔案大小未變（EXEPACK 固定長度）', cur.length, bak.length);
 }
 

@@ -1,19 +1,21 @@
 import iconv from 'iconv-lite';
+import { Buffer } from 'buffer';
+import { decompressGeneralData } from '../utils/compression';
 
 import {
   GRID_COLS, GRID_ROWS, TILE_W, TILE_H, palette,
   PRICE_FIELD_COUNT, PRICE_SEG_COUNT, PRICE_FIELD_SIZE, PRICE_FIELDS,
   LOC_COUNT, LOC_FIELDS, LAND_TILES, MARKER_TILE, MARKER_ID_OFFSET
 } from '../config/constants';
-import { replaceGroupInDsk, rebuildDskBufferCore } from '../core/parser';
+import { replaceGroupInDsk, rebuildDskBufferCore, parsePackPointers } from '../core/parser';
 import { Workspace } from '../core/workspace';
 import {
   analyzeIntegrity, repairMap, findFreeLandId, nextLandId, findMarkerBase,
   wireDirectionsFromGrid, recomputeRouting, type RoutingReport,
 } from '../core/integrity';
 import {
-  MAPS, MAXLOC_TARGET, isSupported as fsSupported, hasFolder, pickGameFolder,
-  readFile as readGameFile, writeFile as writeGameFile, patchExe, readSpecialCount, readCaps,
+  MAPS, TEXT_SOURCE_FILES, isSupported as fsSupported, hasFolder, pickGameFolder,
+  readFile as readGameFile, tryReadFile, writeFile as writeGameFile, patchExe, readSpecialCount, readCaps,
 } from '../core/gamefolder';
 import { History } from '../core/history';
 import { initTilePicker, updateTilePickerSelection } from '../ui/tilepicker';
@@ -75,6 +77,28 @@ function getSegName(segId: number): string {
   if (segId <= 0) return '';
   if (segId < workspace.segmentNames.length) return workspace.segmentNames[segId];
   return extraSegNames[segId] || `地段${segId}`;
+}
+
+// ==== 遊戲字型支援的字集 ====
+// 這款遊戲自帶字型，**只收錄它自己用得到的字**。用了字庫外的漢字，遊戲會顯示成
+// 別的字（實例：新增「苗栗縣」→ 遊戲顯示「邦邦縣」，因為「苗」「栗」不在字庫，
+// 而「縣」在，所以只有第三個字是對的）。
+// 字庫本身的位置還沒找到，但「原版文字裡出現過的字」必定在字庫內，拿來當白名單很安全。
+const gameCharset = new Set<string>();
+
+function collectChars(text: string): void {
+  for (const ch of text) if (/[一-鿿]/.test(ch)) gameCharset.add(ch);
+}
+
+/** 回傳名稱中「遊戲字型沒有」的字。字集還沒建立時回傳空陣列（不亂報警）。 */
+function unsupportedChars(name: string): string[] {
+  if (gameCharset.size === 0) return [];
+  const bad: string[] = [];
+  for (const ch of name) {
+    if (!/[一-鿿]/.test(ch)) continue;
+    if (!gameCharset.has(ch) && !bad.includes(ch)) bad.push(ch);
+  }
+  return bad;
 }
 
 // ==== 地段名稱 ====
@@ -173,7 +197,9 @@ bindLiveField('segNameDisplay', '改地段名稱', (raw) => {
   const applied = setSegName(segId, raw);
   const el = document.getElementById('segNameDisplay') as HTMLInputElement | null;
   if (el && el.value !== applied) el.value = applied;   // 顯示正規化後的結果
-  logMsg(`地段 ${segId} 名稱改為「${applied}」（存檔時寫回 PAK）。`);
+  const bad = unsupportedChars(applied);
+  logMsg(`地段 ${segId} 名稱改為「${applied}」（存檔時寫回 PAK）。` +
+    (bad.length ? `　⚠ 「${bad.join('」「')}」沒有出現在遊戲原本的文字裡，很可能顯示成別的字（實例：苗栗縣→邦邦縣），建議換字或先進遊戲確認。` : ''));
   renderPriceTable(segId);
 });
 
@@ -1409,6 +1435,58 @@ function badSpecialIds(n: number): number[] {
   for (let id = 1; id <= n; id++) if ((cnt.get(id) ?? 0) !== 4) bad.push(id);
   return bad;
 }
+/**
+ * 掃過資料夾裡所有含文字的 PAK，蒐集遊戲字型支援的字集。
+ * 只需在選好資料夾後做一次。
+ */
+/**
+ * 算出每張圖「實際用到的最大地點編號」，當作要寫進 exe 的 maxLocId。
+ * 目前這張圖用記憶體裡的 grid（可能剛編輯過還沒存），其他張圖從資料夾的 PAK 讀。
+ * 讀不到的圖回 null＝不要動它的設定。
+ */
+async function computeMaxLocByMap(): Promise<(number | null)[]> {
+  const out: (number | null)[] = [];
+  for (let i = 0; i < MAPS.length; i++) {
+    if (i === currentMapIndex && workspace.isSaveLoaded) {
+      let max = 0;
+      for (const v of workspace.mapGrid) if (v > 0 && v <= 282 && v > max) max = v;
+      out.push(max > 0 ? max : null);
+      continue;
+    }
+    const buf = await tryReadFile(MAPS[i].pak);
+    if (!buf) { out.push(null); continue; }
+    try {
+      const dvv = new DataView(buf);
+      const bytes = decompressGeneralData(dvv, parsePackPointers(dvv)[1]);
+      const gv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      let max = 0;
+      for (let c = 0; c < 1296; c++) { const v = gv.getUint16(c * 2, true); if (v > 0 && v <= 282 && v > max) max = v; }
+      out.push(max > 0 ? max : null);
+    } catch { out.push(null); }
+  }
+  return out;
+}
+
+async function buildGameCharset(): Promise<void> {
+  if (gameCharset.size > 0) return;
+  // ⚠ 只讀「真正的文字群組」（地圖 PAK 的第 3 組）。把圖像等二進位資料當 Big5 解會產生
+  // 大量假的漢字，字集被灌水就失去把關意義。
+  for (const fname of TEXT_SOURCE_FILES) {
+    const buf = await tryReadFile(fname);
+    if (!buf) continue;
+    try {
+      const dvv = new DataView(buf);
+      const ptrs = parsePackPointers(dvv);
+      if (ptrs.length < 3) continue;
+      const bytes = decompressGeneralData(dvv, ptrs[2]);
+      if (bytes.length > 0) collectChars(iconv.decode(Buffer.from(bytes), 'big5'));
+    } catch { /* 這個檔沒有文字群組，略過 */ }
+  }
+  if (gameCharset.size > 0) {
+    logMsg(`已讀取遊戲原本用到的 ${gameCharset.size} 個漢字。命名用到這之外的字，遊戲可能顯示成別的字。`);
+  }
+}
+
 async function loadMapFromFolder(idx: number): Promise<void> {
   const m = MAPS[idx]; if (!m) return;
   currentMapIndex = idx;
@@ -1465,15 +1543,22 @@ async function saveToGame(): Promise<void> {
       }
     }
 
-    const r = await patchExe(logMsg, currentMapIndex, sc);
+    const maxLocByMap = await computeMaxLocByMap();
+    const r = await patchExe(logMsg, currentMapIndex, sc, maxLocByMap);
     logMsg(`✅ 已一次性寫回：${loadedDskFileName}、${loadedPakFileName}、Run.exe`);
-    if (r.maxLocChanged > 0) logMsg(`　Run.exe：${r.maxLocChanged} 張圖的土地上限被提高到 ${MAXLOC_TARGET}。`);
+    if (r.maxLocChanged > 0) {
+      logMsg(`　Run.exe：${r.maxLocChanged} 張圖的地點上限已對齊各圖實際用到的最大編號` +
+        `（${MAPS.map((m, i) => `${m.name}=${maxLocByMap[i] ?? '不動'}`).join('、')}）。`);
+    }
     if (r.specialChanged) logMsg(`　Run.exe：${MAPS[currentMapIndex].name} 特殊地點數 ${r.specialFrom} → ${r.specialTo}。`);
 
     // 直接回報 exe 現況，避免「更動 0 張圖」被誤讀成「沒有做 patch」
     const caps = await readCaps();
-    logMsg('　Run.exe 目前設定：' + caps.map(c =>
-      `${c.name} 土地上限=${c.maxLoc}${c.maxLoc === MAXLOC_TARGET ? '✓' : '✗'} 特殊數=${c.special}`).join('｜'));
+    logMsg('　Run.exe 目前設定：' + caps.map((c, i) => {
+      const need = maxLocByMap[i];
+      const ok = need == null || c.maxLoc >= need;
+      return `${c.name} 地點上限=${c.maxLoc}${ok ? '✓' : `✗(需≥${need})`} 特殊數=${c.special}`;
+    }).join('｜'));
   } catch (err) {
     logMsg(`存回失敗：${(err as Error).message}`);
   }
@@ -1491,6 +1576,7 @@ if (pickFolderBtn) {
         const name = await pickGameFolder();
         const st = document.getElementById('folderStatus'); if (st) st.textContent = `資料夾：${name}`;
         logMsg(`已選擇遊戲資料夾：${name}`);
+        await buildGameCharset();
         const sel = document.getElementById('mapSelect') as HTMLSelectElement;
         await loadMapFromFolder(parseInt(sel.value) || 0);
       } catch (err) { logMsg(`選擇資料夾已取消或失敗：${(err as Error).message}`); }

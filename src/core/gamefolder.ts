@@ -92,6 +92,14 @@ export async function readSpecialCount(mapIndex: number): Promise<number> {
     return new DataView(raw.buffer).getUint16(m.exeSpecialOffset, true);
 }
 
+/** 遊戲資料夾裡所有含文字的檔案（用來蒐集字型支援的字集）。 */
+export const TEXT_SOURCE_FILES = ['Part1.pak', 'Part2.pak', 'Part3.pak', 'Data.pak'];
+
+/** 讀取資料夾內某檔；讀不到回 null（檔案不存在時不要讓整個流程掛掉）。 */
+export async function tryReadFile(name: string): Promise<ArrayBuffer | null> {
+    try { return await readFile(name); } catch { return null; }
+}
+
 export interface MapCaps { name: string; maxLoc: number; special: number }
 
 /** 讀出 Run.exe 目前三張圖的容量設定，用來回報「現在到底是什麼狀態」。 */
@@ -116,6 +124,8 @@ export async function patchExe(
     logMsg: (m: string) => void,
     mapIndex?: number,
     specialCount?: number,
+    /** 每張圖要設定的 maxLocId（null＝不動那張圖）。不給就沿用舊行為（一律 282）。 */
+    maxLocByMap?: (number | null)[],
 ): Promise<{ maxLocChanged: number; specialChanged: boolean; specialFrom: number; specialTo: number }> {
     if (!(await ensureReadWrite())) throw new Error('沒有資料夾寫入權限');
     const raw = new Uint8Array(await readFile(EXE_NAME));
@@ -125,9 +135,15 @@ export async function patchExe(
     }
     const dv = new DataView(raw.buffer);
     let maxLocChanged = 0;
-    for (const m of MAPS) {
-        if (dv.getUint16(m.exeMaxLocOffset, true) !== MAXLOC_TARGET) {
-            dv.setUint16(m.exeMaxLocOffset, MAXLOC_TARGET, true);
+    for (let i = 0; i < MAPS.length; i++) {
+        const m = MAPS[i];
+        // maxLocId 只要 ≥ 該圖實際用到的最大編號就夠，不需要一律開到 282。
+        // 開太大會讓引擎把中間那一大段空記錄也當成合法地點（拍賣等事件可能因此挑到空槽）。
+        const want = maxLocByMap ? maxLocByMap[i] : MAXLOC_TARGET;
+        if (want == null) continue;
+        const target = Math.min(Math.max(want, 1), MAXLOC_TARGET);
+        if (dv.getUint16(m.exeMaxLocOffset, true) !== target) {
+            dv.setUint16(m.exeMaxLocOffset, target, true);
             maxLocChanged++;
         }
     }

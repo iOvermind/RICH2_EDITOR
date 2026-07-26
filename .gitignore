@@ -25,3 +25,5 @@ dist-ssr
 
 original/
 rich2/
+# DOSBox-X（本機除錯用，勿提交）
+DOSBox-X/

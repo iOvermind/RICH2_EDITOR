@@ -12,6 +12,30 @@ export interface PakParsedResult {
     SEGMENT_NAMES: string[];
 }
 
+/**
+ * 解析封裝檔的群組指標表（PAK 與 DSK 結構相同）。
+ * 指標表從 offset 7 開始，每筆 u16；實際位置 = 7 + 值*2；遇到 0 或越界就結束。
+ */
+export function parsePackPointers(dataView: DataView): number[] {
+    const BASE = 7;
+    let ptrOffset = BASE;
+    const pointers: number[] = [];
+    let firstDataOffset = dataView.byteLength;
+    let lastValidOffset = 0;
+
+    while (ptrOffset < firstDataOffset && ptrOffset < dataView.byteLength) {
+        const ptr = dataView.getUint16(ptrOffset, true);
+        if (ptr === 0) break;
+        const actualOffset = BASE + ptr * 2;
+        if (actualOffset >= dataView.byteLength || actualOffset <= lastValidOffset) break;
+        pointers.push(actualOffset);
+        lastValidOffset = actualOffset;
+        if (actualOffset < firstDataOffset) firstDataOffset = actualOffset;
+        ptrOffset += 2;
+    }
+    return pointers;
+}
+
 export function parseMapPakCore(dataView: DataView, rawPakBuffer: ArrayBuffer, logMsg: (msg: string) => void): PakParsedResult | null {
     logMsg("幹，來真的了，開始解包 PART?.PAK...");
     if (dataView.getUint8(0) !== 0xFD) {
