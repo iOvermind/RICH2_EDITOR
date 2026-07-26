@@ -4,7 +4,7 @@ import iconv from 'iconv-lite';
 import { History } from '../src/core/history.ts';
 import {
   recomputeRouting, nextLandId, findMarkerBase, findRoutingEntries,
-  analyzeIntegrity, MAX_LOC_ID,
+  analyzeIntegrity, renumberSegment, MAX_LOC_ID,
 } from '../src/core/integrity.ts';
 import { LOC_FIELDS, LAND_TILES, MARKER_TILE } from '../src/config/constants.ts';
 
@@ -257,6 +257,44 @@ console.log('\n=== 5c. 地段名稱排版（改名要照原版格式）===');
     check(`原版${name}：既有名稱丟進正規化都原樣不變（不會被我們改壞）`, unchanged === total,
       `${unchanged}/${total}`);
   }
+}
+
+// ==================== 5d. 地段序號 (UNK9) ====================
+// 規則：同地段內依 locId 由小到大給 1,2,3…（三張原版圖 85 個地段零例外）
+console.log('\n=== 5d. 地段序號 renumberSegment ===');
+{
+  for (const [name, d, p] of [['台灣', 'Save_7', 'Part1'], ['香港', 'Save_8', 'Part2'], ['城', 'Save_9', 'Part3']] as const) {
+    const { grid, dv } = load(`${R}/${d}.dsk`, `${R}/${p}.pak`);
+    const segs = new Set<number>();
+    for (const v of grid) {
+      if (v > 0 && v <= MAX_LOC_ID) {
+        const s = dv.getUint16(LOC_FIELDS.SEGMENT + v * 2, true);
+        if (s > 0) segs.add(s);
+      }
+    }
+    let changed = 0;
+    for (const s of segs) changed += renumberSegment(grid, dv, s).length;
+    check(`原版${name}：${segs.size} 個地段重編號後零改動（規則與原版一致）`, changed === 0, `改了 ${changed} 格`);
+  }
+
+  // 中間插入：新編號不是最大值時，後面的要往後推
+  const { grid, dv } = load(`${R}/Save_7.dsk`, `${R}/Part1.pak`);
+  const seg = dv.getUint16(LOC_FIELDS.SEGMENT + 54 * 2, true);   // 台北市
+  const before: number[] = [];
+  for (let id = 1; id <= MAX_LOC_ID; id++) {
+    if (dv.getUint16(LOC_FIELDS.SEGMENT + id * 2, true) === seg) before.push(id);
+  }
+  const smallest = before[0];
+  check(`台北市成員 ${before.join(',')}，最小的 ${smallest} 序號應為 1`,
+    dv.getUint16(LOC_FIELDS.UNK9 + smallest * 2, true) === 1);
+
+  // 把最大的那格序號故意寫錯，重編號應該修回來
+  const last = before[before.length - 1];
+  dv.setUint16(LOC_FIELDS.UNK9 + last * 2, 99, true);
+  const fixed = renumberSegment(grid, dv, seg);
+  eq('序號被寫壞後，重編號會修回正確值',
+    dv.getUint16(LOC_FIELDS.UNK9 + last * 2, true), before.length);
+  check('只改動被寫壞的那一格', fixed.length === 1 && fixed[0] === last, `changed=${fixed}`);
 }
 
 // ==================== 6. 特殊地點數推算 ====================

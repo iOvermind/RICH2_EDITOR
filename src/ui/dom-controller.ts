@@ -11,7 +11,7 @@ import { replaceGroupInDsk, rebuildDskBufferCore, parsePackPointers } from '../c
 import { Workspace } from '../core/workspace';
 import {
   analyzeIntegrity, repairMap, findFreeLandId, nextLandId, findMarkerBase,
-  wireDirectionsFromGrid, recomputeRouting, type RoutingReport,
+  wireDirectionsFromGrid, recomputeRouting, renumberSegment, type RoutingReport,
 } from '../core/integrity';
 import {
   MAPS, TEXT_SOURCE_FILES, isSupported as fsSupported, hasFolder, pickGameFolder,
@@ -140,15 +140,6 @@ function showSegName(segId: number): void {
   el.placeholder = segId > 0 ? '地段名稱（3 字寬）' : '此格非土地';
 }
 
-function calcSegmentOrder(segId: number, locId: number): number {
-  if (!locDataView || segId <= 0 || locId <= 0) return 0;
-  let order = 1;
-  for (let i = 1; i < LOC_COUNT; i++) {
-    if (i === locId) continue;
-    if (getLocField(LOC_FIELDS.SEGMENT, i) === segId) order++;
-  }
-  return order;
-}
 
 function detectMarkerDir(baseLocId: number): number {
   const marker = baseLocId + 950;
@@ -175,7 +166,9 @@ function dirLabel(dir: number): string {
 function applySegmentDerivedFields(locId: number, segId: number): void {
   if (!locDataView || locId <= 0 || segId <= 0) return;
   setLocField(LOC_FIELDS.SEGMENT, locId, segId);
-  setLocField(LOC_FIELDS.UNK9, locId, calcSegmentOrder(segId, locId));
+  // 地段序號要**整段重編**，不能只算自己這一格：新地點的編號若不是該地段最大的，
+  // 它應該插在中間、後面的都要往後推。（原版 85/85 個地段都是依 locId 排的 1..N）
+  renumberSegment(workspace.mapGrid, locDataView, segId);
 
   // 這裡只管地段相關的欄位。UNKA/UNKB 是路由表，改地段不會動到四方向指標、
   // 路徑圖沒變，所以路由也不該在這裡重算 —— 那是「建立格子」時的責任。
@@ -819,8 +812,10 @@ bindLiveField('editSegId', '改地段', (raw) => {
   const segId = parseInt(raw) || 0;
   showSegName(segId);
   if (locId > 0) {
+    const oldSeg = getLocField(LOC_FIELDS.SEGMENT, locId);   // 離開的那個地段也要重編號
     if (segId > 0) {
       applySegmentDerivedFields(locId, segId);
+      if (oldSeg > 0 && oldSeg !== segId && locDataView) renumberSegment(workspace.mapGrid, locDataView, oldSeg);
       (document.getElementById('editUnk9') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNK9, locId).toString();
       (document.getElementById('editUnkA') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNKA, locId).toString();
       (document.getElementById('editUnkB') as HTMLInputElement).value = getLocField(LOC_FIELDS.UNKB, locId).toString();
@@ -828,7 +823,11 @@ bindLiveField('editSegId', '改地段', (raw) => {
       const suggest = detectMarkerDir(locId);
       (document.getElementById('unk3Hint') as HTMLSpanElement).textContent = `建議方向：${dirLabel(suggest)} (${suggest})`;
     } else {
+      // 清掉地段：序號也要歸零，並把原地段剩下的成員重新編號補上空缺
       setLocField(LOC_FIELDS.SEGMENT, locId, 0);
+      setLocField(LOC_FIELDS.UNK9, locId, 0);
+      if (oldSeg > 0 && locDataView) renumberSegment(workspace.mapGrid, locDataView, oldSeg);
+      (document.getElementById('editUnk9') as HTMLInputElement).value = '0';
     }
     renderPriceTable(segId);
   }

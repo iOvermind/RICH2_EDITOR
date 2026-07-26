@@ -35,6 +35,7 @@ export type IssueKind =
     | 'partition'        // 特殊種類掛在道路/土地編號上（或反之）
     | 'land-no-segment'  // 土地編號(≥51)卻沒設地段（買不了、沒價格）
     | 'route-entry'      // UNKA/UNKB=0 的入口格不是剛好一個（0 是入口格專屬標記）
+    | 'segment-order'    // 地段內序號(UNK9)不是依 locId 排的 1..N
     | 'dead-end'         // grid 上路徑地點的方向連結數 < 2（玩家會走不動）
     | 'zero-price';      // 土地(seg>0)的地段買價 = 0（引擎可能除以 0）
 
@@ -180,6 +181,30 @@ export function analyzeIntegrity(grid: Uint16Array, dv: DataView, boundary: numb
         }
     }
 
+    // 地段序號：同地段的地點，依 locId 由小到大應該是 1,2,3…（三張原版圖 85/85 皆如此）。
+    // 號碼錯亂或重複會讓遊戲裡的地段顯示出問題。
+    {
+        const bySeg = new Map<number, number[]>();
+        for (const [id] of cellMap) {
+            if (id <= 0 || id > MAX_LOC_ID) continue;
+            const seg = getF(dv, LOC_FIELDS.SEGMENT, id);
+            if (seg <= 0) continue;
+            let a = bySeg.get(seg); if (!a) { a = []; bySeg.set(seg, a); }
+            a.push(id);
+        }
+        for (const [seg, members] of bySeg) {
+            members.sort((a, b) => a - b);
+            const wrong = members.filter((id, i) => getF(dv, LOC_FIELDS.UNK9, id) !== i + 1);
+            if (wrong.length === 0) continue;
+            const got = members.map(id => getF(dv, LOC_FIELDS.UNK9, id)).join(',');
+            issues.push({
+                kind: 'segment-order', locId: wrong[0],
+                detail: `地段 ${seg} 的序號應為 1~${members.length}（依地點編號 ${members.join(',')} 排序），實際是 ${got}`,
+                fix: () => { renumberSegment(grid, dv, seg); },
+            });
+        }
+    }
+
     // 路由入口格：全圖應該剛好各有一個 UNKA=0（監獄入口）與 UNKB=0（醫院入口），
     // 三張原版圖皆如此。多出來的幾乎都是「手動配了新編號但沒設路由」的格子 ——
     // 那格會被誤認成入口，警車/救護車的接力鏈走到它就結束了。
@@ -283,6 +308,32 @@ export function nextLandId(grid: Uint16Array, dv: DataView, boundary: number = 4
         if (isFreeLandId(cm, dv, id)) return id;
     }
     return findFreeLandId(grid, dv, boundary, maxLoc);
+}
+
+/**
+ * 重新編排某地段所有地點的「地段序號」(UNK9)：**依 locId 由小到大給 1,2,3…**
+ * 三張原版圖共 85 個地段全部遵守這個規則，零例外。
+ * 回傳被改動的地點編號。
+ *
+ * 註：不能用「數一數同地段有幾個再 +1」——那等於永遠給最後一號，
+ * 新增的編號若不是最大的就會給錯，重設既有成員還會撞號。
+ */
+export function renumberSegment(grid: Uint16Array, dv: DataView, segId: number): number[] {
+    if (segId <= 0) return [];
+    const members: number[] = [];
+    for (const [id] of buildCellMap(grid)) {
+        if (id <= 0 || id > MAX_LOC_ID) continue;
+        if (getF(dv, LOC_FIELDS.SEGMENT, id) === segId) members.push(id);
+    }
+    members.sort((a, b) => a - b);
+    const changed: number[] = [];
+    members.forEach((id, i) => {
+        if (getF(dv, LOC_FIELDS.UNK9, id) !== i + 1) {
+            setF(dv, LOC_FIELDS.UNK9, id, i + 1);
+            changed.push(id);
+        }
+    });
+    return changed;
 }
 
 export interface MarkerBaseResult {
