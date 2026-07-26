@@ -1075,45 +1075,6 @@ function rebuildDskBuffer(): ArrayBuffer | null {
   return rebuildDskBufferCore(workspace.rawDskBuffer, workspace.dskGroupPointers, workspace.mapLayout, workspace.locData, finalPriceData, logMsg);
 }
 
-function downloadBuffer(buffer: ArrayBuffer, filename: string): void {
-  const blob = new Blob([buffer], { type: 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
-
-// 注意：這顆按鈕在 UI 改版後已從 index.html 移除（改用「儲存到遊戲」）。
-// 這裡必須加防護 —— 對 null 呼叫 addEventListener 會丟例外，讓 bindDOMEvents 後面
-// 所有綁定（含「選擇遊戲資料夾」）全部沒掛上，症狀是按鈕按了完全沒反應。
-const exportDskBtn = document.getElementById('exportDskBtn') as HTMLButtonElement | null;
-if (exportDskBtn) {
-  exportDskBtn.addEventListener('click', function () {
-    if (!workspace.isSaveLoaded) { logMsg("還沒載入 DSK！"); return; }
-    const syncFn = (window as any).syncMarkerTilesFromOwnership;
-    if (typeof syncFn === 'function') {
-      const touched = syncFn(1, 2);
-      logMsg(`匯出前自動同步購地標記圖塊：${touched} 格。`);
-    }
-    // 匯出前結構完整性掃描：有問題就警告（不擋，讓你自行決定）
-    if (locDataView) {
-      const issues = analyzeIntegrity(workspace.mapGrid, locDataView, getSpecialBoundary(), priceDataView);
-      if (issues.length) {
-        logMsg(`⚠ 偵測到 ${issues.length} 個結構問題（詳見「警告」頁），遊戲可能出錯：`);
-        issues.slice(0, 8).forEach((i: any) => logMsg(`　・${i.detail}`));
-      } else {
-        logMsg('✅ 結構完整性檢查通過。');
-      }
-    }
-    const buf = rebuildDskBuffer();
-    if (buf) {
-      // 把這裡寫死的字串換成變數！
-      downloadBuffer(buf, loadedDskFileName);
-      logMsg(`${loadedDskFileName} 匯出完成！`);
-    }
-  });
-}
-
 // === 新增：重建 PAK 檔案的函式 ===
 function rebuildPakBuffer(): ArrayBuffer | null {
   if (!workspace.rawPakBuffer || workspace.pakGroupPointers.length < 2) {
@@ -1153,22 +1114,9 @@ function rebuildPakBuffer(): ArrayBuffer | null {
   return curBytes.buffer;
 }
 
-// === 新增：綁定匯出 PAK 按鈕的點擊事件 ===
-const exportPakBtn = document.getElementById('exportPakBtn') as HTMLButtonElement;
-if (exportPakBtn) {
-  exportPakBtn.addEventListener('click', function () {
-    if (!workspace.rawPakBuffer) {
-      logMsg("還沒載入 PAK！不能空手套白狼啊！");
-      return;
-    }
-    const buf = rebuildPakBuffer();
-    if (buf) {
-      // 這裡會吃你前面設好的 loadedPakFileName 動態檔名
-      downloadBuffer(buf, loadedPakFileName);
-      logMsg(`幹得好！${loadedPakFileName} 匯出完成！`);
-    }
-  });
-}
+// 註：UI 改版後已無「匯出 DSK / 匯出 PAK」按鈕，改用「儲存到遊戲」直接寫回資料夾。
+// 對應的 downloadBuffer / exportDskBtn / exportPakBtn 三段死碼已移除
+// （其中 exportDskBtn 未加 null 防護，曾害得它之後的所有事件綁定全部失效）。
 
 (document.getElementById('syncMarkerBtn') as HTMLButtonElement).addEventListener('click', function () {
   flushAllEdits();
