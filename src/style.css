@@ -1,112 +1,83 @@
-/* 1. 讓整個畫面回歸自然，外層可以出現捲軸！ */
-body {
-  margin: 0;
-  padding: 0;
-  background-color: #1e1e1e;
-  color: #d4d4d4;
-  font-family: sans-serif;
-}
+@import "tailwindcss";
+/* 自帶字體，不連 fonts.googleapis.com。要更新字集或圖示：node tools/fetch-fonts.mjs */
+@import "./assets/fonts/fonts.css";
+@plugin "@tailwindcss/forms";
 
-/* 2. 頂部標題列：吸頂，往下捲才不會不見 */
-.top-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 20px;
-  background-color: #252526;
-  border-bottom: 1px solid #3c3c3c;
-  position: sticky;
-  top: 0;
-  z-index: 100;
-}
+/* 原本 index.html 裡 tailwind.config 的 darkMode:"class"。
+   目前沒有用到 dark: 變體，但 <html class="dark"> 還在，先維持一樣的語意。 */
+@custom-variant dark (&:where(.dark, .dark *));
 
-.top-bar h2 {
-  margin: 0;
-  font-size: 18px;
-}
+/* 設計規範的色票與字體（原本寫在 index.html 的 tailwind.config script 裡） */
+@theme {
+  --color-background: #131313;
+  --color-surface: #131313;
+  --color-surface-container-lowest: #0e0e0e;
+  --color-surface-container-low: #1b1b1c;
+  --color-surface-container-high: #2a2a2a;
+  --color-surface-container-highest: #353535;
+  --color-surface-bright: #393939;
+  --color-on-background: #e5e2e1;
+  --color-on-surface: #e5e2e1;
+  --color-on-surface-variant: #c0c7d3;
+  --color-outline-variant: #404751;
+  --color-primary: #9fcaff;
+  --color-primary-container: #007acc;
+  --color-on-primary-container: #ffffff;
+  --color-tertiary: #66dd8b;
+  --color-error: #ffb4ab;
 
-.file-inputs {
-  display: flex;
-  gap: 20px;
-}
-
-/* 3. 下方主要版面：讓它們自然排版 */
-.main-container {
-  display: flex;
-  padding: 10px;
-  gap: 10px;
-  align-items: flex-start;
-  /* 讓右邊不要硬跟著左邊地圖拉長 */
-}
-
-/* 4. 左側地圖：拔掉內捲軸，直接顯示完整大小 */
-.map-section {
-  flex-shrink: 0;
-  background-color: #252526;
-  border: 1px solid #3c3c3c;
-  padding: 10px;
-  border-radius: 6px;
-}
-
-canvas {
-  display: block;
-}
-
-/* 5. 右側控制台：讓它跟著畫面捲動 (Sticky) */
-.control-section {
-  display: flex;
-  flex-direction: column;
-  flex-grow: 1;
-  gap: 10px;
-  min-width: 320px;
-  max-width: 450px;
-  position: sticky;
-  top: 70px;
-  /* 避開標題列的高度 */
-  height: calc(100vh - 80px);
-  /* 鎖定高度，這樣裡面的東西才能內捲 */
-}
-
-/* 共通的面板外觀 */
-.panel-block {
-  background-color: #252526;
-  border: 1px solid #3c3c3c;
-  padding: 10px;
-  border-radius: 6px;
-}
-
-/* 右上：資訊區，大小固定 */
-.info-block {
-  flex-shrink: 0;
-}
-
-/* ★ 解決你的痛點：給 infoBox 固定最大高度跟內捲軸 ★ */
-
-
-/* 右中：編輯區，霸佔剩下的所有空間，內容太多就內部捲動！ */
-.edit-block {
-  flex-grow: 1;
-  overflow-y: auto;
-}
-
-/* 右下：按鈕區，固定在底部不被壓縮 */
-.action-block {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.action-block button {
-  padding: 6px;
-  cursor: pointer;
+  --font-headline: "Noto Sans", "Noto Sans TC", sans-serif;
+  --font-body: "Noto Sans", "Noto Sans TC", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
 }
 
 /* =========================================
-   被誤殺的內部元件 UI (頁籤、圖塊、方向鍵)
+   基礎
    ========================================= */
+/* 圖示字體。這一整段原本是 Google 的樣式表附帶的，自帶字體後要自己寫，
+   少了 font-family 或連字設定，按鈕上就會直接顯示 route、healing 這些英文字。 */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: 'liga';   /* 圖示名稱是靠連字轉成圖形的 */
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+}
 
-/* 1. 頁籤切換系統復活 (傳統樣式) */
+/* 標籤統一 12px（會蓋掉標記上的 text-[10px]；要調標籤大小改這裡） */
+label {
+  font-size: 12px !important;
+  letter-spacing: 0.05em;
+}
+
+/* Tailwind v4 的 preflight 把按鈕游標改成 default，這裡補回手指 */
+button {
+  cursor: pointer;
+}
+
+/* 殺掉數字輸入框的上下小箭頭 */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: none;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* =========================================
+   頁籤（傳統樣式）
+   ========================================= */
 .tab-bar {
   display: flex;
   background-color: #252526;
@@ -138,7 +109,7 @@ canvas {
 }
 
 .tab-btn.active {
-  background-color: #1e1e1e; /* 配合底下的 panel 背景色 (#1e1e1e 或 #1b1b1c) */
+  background-color: #1e1e1e; /* 配合底下的 panel 背景色 */
   color: #e5e2e1;
   border-bottom: 1px solid #1e1e1e; /* 覆蓋掉 .tab-bar 的底線 */
   margin-bottom: -1px;
@@ -151,11 +122,12 @@ canvas {
   display: block;
 }
 
-/* 2. 圖塊排版復活 (讓它變成多欄網格) */
+/* =========================================
+   圖塊選擇器
+   ========================================= */
 #tilePickerWrap {
   display: flex;
-  flex-wrap: wrap;
-  /* 滿了就自動換行 */
+  flex-wrap: wrap; /* 滿了就自動換行 */
   gap: 2px;
 }
 
@@ -166,36 +138,27 @@ canvas {
 }
 
 .tile-btn.selected {
-  border-color: #e51400;
-  /* 選取時的紅框 */
+  border-color: #e51400; /* 選取時的紅框 */
 }
 
-/* 十字導航區專用樣式 - 修正相容性版 */
+/* =========================================
+   十字導航區（尺寸鎖死，避免被通用輸入框樣式撐開）
+   ========================================= */
+.dir-grid-container {
+  width: 124px; /* (40px * 3) + gap */
+  margin: 0 auto;
+}
+
 .dir-grid input[type="number"] {
   width: 40px !important;
   height: 40px !important;
   padding: 0 !important;
   line-height: 40px;
-  font-size: 12px;
+  /* !important 是為了壓過 #editPanel input[type="number"] 的 14px */
+  font-size: 13px !important;
   text-align: center;
-
-  /* 標準屬性放在後面 */
-  -webkit-appearance: none;
-  /* Chrome, Safari, Edge */
-  -moz-appearance: textfield;
-  /* Firefox 舊版相容 */
-  appearance: none;
-  /* 標準定義 */
 }
 
-/* 徹底殺掉 Chrome/Safari 的上下小箭頭 */
-.dir-grid input[type="number"]::-webkit-inner-spin-button,
-.dir-grid input[type="number"]::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-/* 確保中間裝飾點也是正方形 */
 .dir-grid .center-dot-box {
   width: 40px;
   height: 40px;
@@ -204,59 +167,37 @@ canvas {
   justify-content: center;
 }
 
-.dir-grid-container {
-  width: 124px;
-  /* (40px * 3) + gap */
-  margin: 0 auto;
-}
-
-/* 4. 價格表格順便上個保險，免得也跑版 */
-table {
+/* =========================================
+   價格表（只作用在價格表上，不要外漏成全站 table 樣式）
+   ========================================= */
+#priceTable {
   width: 100%;
   border-collapse: collapse;
   margin-top: 5px;
   font-size: 12px;
 }
 
-th,
-td {
+#priceTable th,
+#priceTable td {
   border: 1px solid #555;
   padding: 4px;
   text-align: center;
 }
 
-th {
+#priceTable th {
   background: #3c3c3c;
 }
 
-td input[type="number"] {
-  width: 60px;
-  background: #3c3c3c;
-  color: #d4d4d4;
-  border: 1px solid #555;
-  border-radius: 3px;
-  text-align: right;
-}
-
-/* 調整地圖容器位置，往上移一點避開左下角 */
-
-
-/* 統一調整 Inspector 標籤大小 */
-label {
-  font-size: 12px;
-  /* 稍微放大 label，不然眼睛會瞎 */
-  letter-spacing: 0.05em;
-}
-
-/* 針對價格表內部的 input 縮小，避免影響編輯 */
 #priceTbody input {
   font-size: 12px;
   padding: 2px 6px;
   height: 24px;
   background: #0e0e0e;
   border: 1px solid #404751;
+  border-radius: 3px;
   width: 80px;
   text-align: right;
+  color: #d4d4d4;
 }
 
 #priceTbody td {
@@ -264,27 +205,25 @@ label {
   font-size: 12px;
 }
 
-/* 讓 Inspector 內部的 Input 字體也統一 */
+/* =========================================
+   右下按鈕區
+   ========================================= */
+.action-block {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.action-block button {
+  padding: 6px;
+  cursor: pointer;
+}
+
+/* Inspector 內部的輸入框字體加大好辨識 */
 #editPanel input[type="number"],
 #editPanel select {
   font-size: 14px;
-  /* 輸入框字體加大好辨識 */
-}
-
-.info-panel-clean {
-  /* 背景用深灰半透明，加上磨砂玻璃效果 */
-  background: rgba(25, 25, 25, 0.7);
-  backdrop-filter: blur(15px);
-  -webkit-backdrop-filter: blur(15px);
-
-  /* 這是你唯一要的：淡色細線框 (0.5px) */
-  border: 0.5px solid rgba(255, 255, 255, 0.15);
-
-  /* 關鍵：徹底拔掉陰影，不管是 CSS 還是 Tailwind 都不准有 */
-  box-shadow: none !important;
-
-  /* 確保背景不會滲出色塊 */
-  background-clip: padding-box;
 }
 
 /* =========================================
@@ -342,4 +281,7 @@ label {
 .input-unified:focus {
   border-color: #007acc;
   outline: none;
+}
+.input-unified::placeholder {
+  color: #6b6b6b;
 }

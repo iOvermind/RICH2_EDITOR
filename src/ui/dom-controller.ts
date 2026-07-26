@@ -47,6 +47,9 @@ let loadedDskFileName: string = 'SAVE_1.DSK';
 export function logMsg(msg: string): void {
   infoBox.innerHTML += `<br>> ${msg}`;
   infoBox.scrollTop = infoBox.scrollHeight;
+  // 底部狀態列跟著顯示最新一則（純文字，去掉訊息裡可能夾帶的標籤）
+  const bar = document.getElementById('statusMsg');
+  if (bar) bar.textContent = `> ${msg.replace(/<[^>]*>/g, '')}`;
 }
 
 // 處理 PART?.PAK 封裝資料集
@@ -303,7 +306,7 @@ function renderPriceTable(segId: number): void {
       <td class="px-3 py-2 text-right">
         <input type="number" min="0" max="65535" value="${val}" 
                data-fi="${fi}" data-seg="${segId}" data-extra="${isExtra ? 1 : 0}"
-               class="bg-surface-container-lowest border border-outline-variant/30 rounded text-right px-2 py-1 focus:ring-1 focus:ring-primary outline-none">
+               class="bg-surface-container-lowest border border-outline-variant/30 rounded-sm text-right px-2 py-1 focus:ring-1 focus:ring-primary outline-hidden">
       </td>
     `;
     tbody.appendChild(tr);
@@ -442,6 +445,9 @@ function doRedo(): void {
 }
 
 let warnings: WarningMsg[] = [];
+// Run.exe [0x1098] 目前寫的特殊地點數（載入地圖時讀進來，存檔後更新）。
+// null＝還沒讀到 exe（沒選資料夾或沒有 exe），這時不做比對。
+let exeSpecialCount: number | null = null;
 function runValidation(): void {
   warnings = [];
   if (!workspace.isSaveLoaded || !workspace.locData) { renderWarnList(); return; }
@@ -476,6 +482,24 @@ function runValidation(): void {
     }
   }
 
+  // === exe 的特殊地點數 [0x1098] 與地圖現況對不上 ===
+  // 這個值寫在 Run.exe 裡、不在地圖檔裡，改完地圖不會自己跟著變，所以在這裡提醒。
+  if (exeSpecialCount != null) {
+    const n = autoSpecialCount();
+    if (n !== exeSpecialCount) {
+      const scInp = document.getElementById('specialCountInput') as HTMLInputElement | null;
+      const pending = scInp && scInp.value !== '' ? parseInt(scInp.value) : null;
+      const detail = n > exeSpecialCount
+        ? `編號 ${exeSpecialCount + 1}~${n} 在遊戲裡不會被當成特殊地點`
+        : `編號 ${n + 1}~${exeSpecialCount} 會被引擎當成特殊地點，但地圖上不是 2x2，玩家踩上去可能當機`;
+      warnings.push({
+        type: 'special-count', cells: [],
+        msg: `【exe/特殊數】Run.exe 寫 ${exeSpecialCount}，地圖實際是 ${n} → ${detail}。` +
+          (pending === n ? '　欄位已填好，按「儲存到遊戲」即生效。' : `　按「修復特殊」填入 ${n} 再存檔。`),
+      });
+    }
+  }
+
   const warnTab = document.querySelector('[data-tab="tabWarn"]') as HTMLDivElement;
   if (warnTab) {
     warnTab.textContent = warnings.length > 0 ? `⚠ 警告 (${warnings.length})` : '✅ 無警告';
@@ -491,6 +515,11 @@ function getSpecialBoundary(): number {
 }
 
 function renderWarnList(): void {
+  const statusWarn = document.getElementById('statusWarn');
+  if (statusWarn) {
+    statusWarn.textContent = warnings.length > 0 ? `⚠ ${warnings.length}` : '✅ 0';
+    statusWarn.className = warnings.length > 0 ? 'text-error' : 'text-tertiary';
+  }
   const list = document.getElementById('warnList') as HTMLDivElement;
   if (warnings.length === 0) { list.innerHTML = '<div style="color:#4ec9b0">✅ 目前無警告</div>'; return; }
   list.innerHTML = '';
@@ -1442,6 +1471,8 @@ async function loadMapFromFolder(idx: number): Promise<void> {
     applyDskBuffer(await readGameFile(m.dsk), m.dsk);
     refreshAfterLoad();   // ← 少了這步，資料進了記憶體但畫面不會更新，看起來就像「載不進來」
     history.clear();      // 舊地圖的復原記錄對新地圖沒意義
+    const statusMap = document.getElementById('statusMap');
+    if (statusMap) statusMap.textContent = m.name;
     logMsg(`已從遊戲資料夾載入【${m.name}】：${m.pak} + ${m.dsk}` +
       `（圖塊 ${workspace.mapTilesData.length / 480} 個、地段 ${workspace.segmentNames.length - 1} 個、${locDataView ? '地點資料已就緒' : '⚠ 地點資料讀取失敗'}）`);
     // 讀 exe 目前的特殊地點數，顯示到欄位
@@ -1449,8 +1480,10 @@ async function loadMapFromFolder(idx: number): Promise<void> {
       const sc = await readSpecialCount(idx);
       const inp = document.getElementById('specialCountInput') as HTMLInputElement | null;
       if (inp) inp.value = sc.toString();
+      exeSpecialCount = sc;
       logMsg(`目前【${m.name}】特殊地點數 [0x1098] = ${sc}（自動推算最大特殊編號 = ${autoSpecialCount()}）`);
-    } catch { /* 沒有 exe 也沒關係 */ }
+    } catch { exeSpecialCount = null; /* 沒有 exe 也沒關係，只是不做比對 */ }
+    runValidation();   // exe 值進來了，重跑一次才會出現「特殊數對不上」的警告
   } catch (err) {
     logMsg(`載入【${m.name}】失敗：${(err as Error).message}`);
   }
@@ -1501,6 +1534,8 @@ async function saveToGame(): Promise<void> {
 
     // 直接回報 exe 現況，避免「更動 0 張圖」被誤讀成「沒有做 patch」
     const caps = await readCaps();
+    // exe 已經寫過了，比對基準要跟著更新，警告才會消失
+    if (caps[currentMapIndex]) { exeSpecialCount = caps[currentMapIndex].special; runValidation(); }
     logMsg('　Run.exe 目前設定：' + caps.map((c, i) => {
       const need = maxLocByMap[i];
       const ok = need == null || c.maxLoc >= need;
@@ -1540,7 +1575,7 @@ if (mapSelectEl) {
 const saveToGameBtn = document.getElementById('saveToGameBtn');
 if (saveToGameBtn) saveToGameBtn.addEventListener('click', () => { saveToGame(); });
 
-// 「自動」：把特殊數欄位設成自動推算值（最大特殊種類編號）
+// 「修復特殊」：把特殊數欄位設成自動推算值（最大特殊種類編號）
 const specialAutoBtn = document.getElementById('specialAutoBtn');
 if (specialAutoBtn) {
   specialAutoBtn.addEventListener('click', () => {
@@ -1551,6 +1586,7 @@ if (specialAutoBtn) {
     const bad = badSpecialIds(n);
     logMsg(`自動推算特殊地點數 = ${n}（佔 2x2 四格的最大編號；一般道路只佔一格）。存檔時會寫入 [0x1098]。` +
       (bad.length ? `　⚠ 但編號 ${bad.join('、')} 不是 2x2，請先確認。` : ''));
+    runValidation();   // 欄位填好了，警告要跟著改口（改成「存檔即生效」）
   });
 }
 

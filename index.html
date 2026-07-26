@@ -6,151 +6,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rich2 Editor | Map Studio</title>
 
-  <!-- 引入 Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <!-- Tailwind 由 Vite 在建置時產出（設定與色票見 src/style.css 的 @theme），
+       不再走 cdn.tailwindcss.com——那是開發用版本，且離線就整個垮掉。 -->
 
-  <!-- 引入字體與圖示 -->
-  <link
-    href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Sans:wght@400;500;700&family=JetBrains+Mono&display=swap"
-    rel="stylesheet" />
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
-    rel="stylesheet" />
+  <!-- 字體與圖示都自帶（src/assets/fonts/），不連外；產生方式見 tools/fetch-fonts.mjs -->
 
-  <!-- Tailwind 設定檔 (擷取自設計圖規範) -->
-  <script>
-    tailwind.config = {
-      darkMode: "class",
-      theme: {
-        extend: {
-          colors: {
-            "background": "#131313",
-            "surface": "#131313",
-            "surface-container-lowest": "#0e0e0e",
-            "surface-container-low": "#1b1b1c",
-            "surface-container-high": "#2a2a2a",
-            "surface-container-highest": "#353535",
-            "surface-bright": "#393939",
-            "on-background": "#e5e2e1",
-            "on-surface": "#e5e2e1",
-            "on-surface-variant": "#c0c7d3",
-            "outline-variant": "#404751",
-            "primary": "#9fcaff",
-            "primary-container": "#007acc",
-            "on-primary-container": "#ffffff",
-            "tertiary": "#66dd8b",
-            "error": "#ffb4ab",
-          },
-          fontFamily: {
-            "headline": ["'Noto Sans'", "'Noto Sans TC'", "sans-serif"],
-            "body": ["'Noto Sans'", "'Noto Sans TC'", "sans-serif"],
-            "mono": ["'JetBrains Mono'", "monospace"]
-          }
-        }
-      }
-    }
-  </script>
-
-  <style>
-    /* 1. 基礎與字體設定 */
-    .material-symbols-outlined {
-      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-      vertical-align: middle;
-    }
-
-    label {
-      font-size: 12px !important;
-      letter-spacing: 0.05em;
-    }
-
-    /* 2. 地圖佈局：地圖上移，避免被左下角擋住 */
-    main.grid-canvas {
-      background-image: radial-gradient(circle, #2a2a2a 1px, transparent 1px);
-      background-size: 32px 32px;
-      align-items: flex-start;
-      padding-top: 40px;
-    }
-
-    /* 3. 左下角面板：只有細線框，絕對沒有外層大黑影 */
-    .info-panel-clean {
-      background: rgba(25, 25, 25, 0.75);
-      backdrop-filter: blur(15px);
-      -webkit-backdrop-filter: blur(15px);
-
-      /* 這是你要的淡色細線框 */
-      border: 0.5px solid rgba(255, 255, 255, 0.15) !important;
-
-      /* 關鍵：徹底拔掉陰影，防止出現你說的「外層大黑框」 */
-      box-shadow: none !important;
-      background-clip: padding-box;
-    }
-
-    /* 4. 右側 Inspector 控制 */
-    .tab-pane {
-      display: none;
-    }
-
-    .tab-pane.active {
-      display: block;
-    }
-
-    /* 價格頁籤：縮小字體避免撐破欄位 */
-    #priceTbody input {
-      font-size: 12px;
-      padding: 2px 6px;
-      height: 24px;
-      background: #0e0e0e;
-      border: 1px solid rgba(64, 71, 81, 0.5);
-      width: 80px;
-      text-align: right;
-    }
-
-    #priceTbody td {
-      padding: 4px 8px !important;
-      font-size: 12px;
-    }
-
-    /* 5. 十字導航區 (Directional Segment) 尺寸鎖死 */
-    .dir-grid-container {
-      width: 124px;
-      margin: 0 auto;
-    }
-
-    .dir-grid input[type="number"] {
-      width: 40px !important;
-      height: 40px !important;
-      padding: 0 !important;
-      line-height: 40px;
-      font-size: 13px !important;
-      text-align: center;
-      -webkit-appearance: none;
-      -moz-appearance: textfield;
-      appearance: none;
-    }
-
-    .dir-grid .center-dot-box {
-      width: 40px;
-      height: 40px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    /* 6. 通用輸入框處理 */
-    input[type="file"] {
-      display: none;
-    }
-
-    input[type="number"]::-webkit-inner-spin-button,
-    input[type="number"]::-webkit-outer-spin-button {
-      -webkit-appearance: none;
-      margin: 0;
-    }
-
-    input[type="number"] {
-      -moz-appearance: textfield;
-      appearance: none;
-    }
-  </style>
 
 </head>
 
@@ -176,13 +36,6 @@
         <option value="2">大富翁城 (Part3/Save_9)</option>
       </select>
       <span id="folderStatus" class="text-[10px] text-on-surface-variant/70 max-w-[120px] truncate">未選資料夾</span>
-      <div class="flex items-center gap-1" title="存檔時寫入該圖的特殊地點數 [0x1098]（= 特殊地點最大編號）。留空＝不動。">
-        <span class="text-[10px] text-on-surface-variant/70">特殊數</span>
-        <input type="number" id="specialCountInput" min="0" max="49" placeholder="—"
-          class="input-unified w-12 px-1 py-1 text-sm font-mono text-center">
-        <button id="specialAutoBtn"
-          class="btn-unified px-2 py-1 text-[10px] font-bold">自動</button>
-      </div>
       <div class="flex items-center gap-1">
         <button id="undoBtn" disabled title="沒有可復原的動作"
           class="btn-unified px-2 py-1.5 text-sm flex items-center disabled:opacity-30 disabled:cursor-not-allowed">
@@ -217,7 +70,7 @@
 
     <!-- Right SideNavBar (右側獨立區塊：控制台) -->
     <aside
-      class="w-116 min-w-[28rem] max-w-[28rem] flex-none bg-surface-container-low flex flex-col border-l border-outline-variant/15 z-40">
+      class="min-w-[28rem] max-w-[28rem] flex-none bg-surface-container-low flex flex-col border-l border-outline-variant/15 z-40">
 
       <!-- Header -->
       <div class="px-5 py-4 flex flex-col gap-1">
@@ -278,7 +131,7 @@
               <input type="number" id="editSpecial" min="0" max="10"
                 class="input-unified w-16 text-sm font-mono p-2">
               <div id="specialNameDisplay"
-                class="flex-1 bg-surface-container-lowest border-none p-2 text-xs text-on-surface-variant flex items-center italic rounded-sm overflow-hidden text-ellipsis whitespace-nowrap">
+                class="flex-1 bg-surface-container-lowest border-none p-2 text-xs text-on-surface-variant flex items-center italic rounded-xs overflow-hidden text-ellipsis whitespace-nowrap">
               </div>
             </div>
           </div>
@@ -291,7 +144,7 @@
                 class="input-unified w-16 text-sm font-mono p-2">
               <input type="text" id="segNameDisplay" maxlength="8" placeholder="地段名稱"
                 title="遊戲畫面固定 3 個字寬。輸入 2 個字會自動在中間補全形空白（像原版的「中　環」），超過 3 個字會被截斷。"
-                class="input-unified flex-1 p-2 text-xs text-tertiary rounded-sm min-w-0">
+                class="input-unified flex-1 p-2 text-xs text-tertiary rounded-xs min-w-0">
               <button id="addSegBtn" title="新增地段"
                 class="btn-unified w-8 flex items-center justify-center transition-colors">
                 <span class="material-symbols-outlined text-[16px]">add</span>
@@ -356,7 +209,7 @@
                 <input type="number" id="editDirLeft" min="0" max="282" placeholder="左"
                   class="input-unified transition-colors">
 
-                <div class="center-dot-box bg-primary/10 border border-primary/30 rounded-sm">
+                <div class="center-dot-box bg-primary/10 border border-primary/30 rounded-xs">
                   <div class="w-1.5 h-1.5 bg-primary rounded-full"></div>
                 </div>
 
@@ -403,20 +256,32 @@
 
         <!-- 警告頁 -->
         <div id="tabWarn" class="tab-pane space-y-3">
-          <div class="flex items-center justify-between gap-2">
-            <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">點擊警告可跳至該格子</div>
-            <div class="flex items-center gap-1.5 shrink-0">
-              <button id="recomputeRouteBtn"
-                title="檢查並修復 UNKA(往監獄)/UNKB(往醫院) 路由——警車、救護車、出獄出院的位移表。只修真正走不到的格子，其餘保留原版寫法。按住 Shift 點擊＝全部改成最短路。"
-                class="btn-unified px-2 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
-                <span class="material-symbols-outlined text-xs">route</span>修復路由
-              </button>
-              <button id="repairMapBtn" title="自動修復可安全修復的問題（座標同步、清除孤兒記錄）"
-                class="btn-unified px-2 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
-                <span class="material-symbols-outlined text-xs">healing</span>修復地圖
-              </button>
-            </div>
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <button id="recomputeRouteBtn"
+              title="檢查並修復 UNKA(往監獄)/UNKB(往醫院) 路由——警車、救護車、出獄出院的位移表。只修真正走不到的格子，其餘保留原版寫法。按住 Shift 點擊＝全部改成最短路。"
+              class="btn-unified px-2 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
+              <span class="material-symbols-outlined text-xs">route</span>修復路由
+            </button>
+            <button id="specialAutoBtn"
+              title="依佔格數推算這張圖的特殊地點數（佔 2x2 四格的最大編號），填進下面的欄位。要按「儲存到遊戲」才會真的寫回 Run.exe [0x1098]。"
+              class="btn-unified px-2 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
+              <span class="material-symbols-outlined text-xs">grid_view</span>修復特殊
+            </button>
+            <button id="repairMapBtn" title="自動修復可安全修復的問題（座標同步、清除孤兒記錄）"
+              class="btn-unified px-2 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
+              <span class="material-symbols-outlined text-xs">healing</span>修復地圖
+            </button>
           </div>
+
+          <div class="flex items-center gap-2"
+            title="存檔時寫入該圖的特殊地點數 [0x1098]（= 特殊地點最大編號）。留空＝不動 exe。">
+            <span class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">特殊數</span>
+            <input type="number" id="specialCountInput" min="0" max="49" placeholder="—"
+              class="input-unified w-14 px-1 py-1 text-sm font-mono text-center">
+            <span class="text-[10px] text-on-surface-variant/70">留空＝存檔時不動 exe</span>
+          </div>
+
+          <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">點擊警告可跳至該格子</div>
           <div id="warnList" class="space-y-2 text-xs"></div>
         </div>
 
@@ -459,42 +324,24 @@
     </div>
   </div>
 
-  <!-- Log Console (底部狀態列) -->
+  <!-- 底部狀態列：左邊是最新一則操作記錄，右邊是當下狀態（由 dom-controller 更新） -->
   <footer
     class="h-8 bg-[#131313] border-t border-outline-variant/15 flex items-center px-4 gap-6 font-mono text-[10px] shrink-0">
-    <div class="flex gap-2 items-center text-tertiary">
-      <span class="material-symbols-outlined text-xs">terminal</span>
-      <span>> Editor initialized successfully</span>
+    <div class="flex gap-2 items-center text-tertiary min-w-0">
+      <span class="material-symbols-outlined text-xs shrink-0">terminal</span>
+      <span id="statusMsg" class="truncate">&gt; 編輯器已啟動</span>
     </div>
-    <div class="ml-auto flex items-center gap-4 text-on-surface-variant/50">
-      <span>UTF-8</span>
+    <div class="ml-auto flex items-center gap-4 text-on-surface-variant/50 shrink-0">
+      <span>BIG5</span>
       <span>CANVAS: 864x720</span>
-      <span class="text-primary font-bold">READY</span>
+      <span id="statusWarn">—</span>
+      <span id="statusMap" class="text-primary font-bold">未載入</span>
     </div>
   </footer>
 
-  <!-- 確保原本的 JS 能夠載入 -->
+  <!-- 頁籤切換由 dom-controller.ts 綁定（它切換之外還會在開啟警告頁時重跑檢查），
+       原本這裡有一份重複的 inline 版本，已移除。 -->
   <script type="module" src="/src/main.ts"></script>
-
-  <!-- 簡易的頁籤切換邏輯 (如果原本的 JS 沒有處理 UI 切換的話) -->
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const tabBtns = document.querySelectorAll('.tab-btn');
-      const tabPanes = document.querySelectorAll('.tab-pane');
-
-      tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-          // 移除所有 active
-          tabBtns.forEach(b => b.classList.remove('active'));
-          tabPanes.forEach(p => p.classList.remove('active'));
-          btn.classList.add('active');
-
-          const targetId = btn.getAttribute('data-tab');
-          document.getElementById(targetId).classList.add('active');
-        });
-      });
-    });
-  </script>
 </body>
 
 </html>

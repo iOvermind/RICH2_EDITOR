@@ -55,13 +55,14 @@
 ## 🚀 本地開發 (Local Development)
 
 ### 系統需求
-- Node.js (建議 v18 以上)
+- Node.js **v20.6 以上**（測試用 `module.register()` 掛 loader hook）
 
 ### 快速開始
 1. 安裝相依依賴：
    ```bash
-   npm install
+   npm install --legacy-peer-deps
    ```
+   （`vite-plugin-node-polyfills` 尚未宣告支援 vite 8，需要略過 peer 檢查。）
 2. 啟動熱刷新開發伺服器：
    ```bash
    npm run dev
@@ -73,3 +74,26 @@
 npm run build
 ```
 打包後的靜態檔案會輸出於 `dist/` 目錄，可直接部署至任何支援靜態網頁的伺服器 (如 GitHub Pages, Vercel, Netlify)。
+
+### 樣式與字體（完全離線）
+
+介面不連任何 CDN：Tailwind 由 Vite 在建置時產出（色票與字體設定寫在 `src/style.css` 的 `@theme`），字體與圖示自帶在 `src/assets/fonts/`。
+
+中文字體只含**介面用得到的字 + 遊戲字型字集**（`docs/game-charset.txt`），整包 CJK 有好幾 MB，子集化後約 590 KB。UI 文案有增刪、或換了 Material Symbols 圖示時，重新產生一次：
+
+```bash
+node tools/fetch-fonts.mjs
+```
+
+### 測試
+```bash
+npm test
+```
+回歸測試直接匯入 `src/` 的原始碼跑（`tests/loader.mjs` 會即時剝掉型別、補上副檔名，不需要先建置）。
+
+部分測試要拿真實遊戲檔當基準，這些檔案**不放進 repo**（遊戲原始資料，已在 `.gitignore` 內）。找不到就會標成 `⏭ 略過`，不算失敗：
+
+| 用途 | 預設位置 | 環境變數 |
+|---|---|---|
+| 原版基準檔（未修改的 `Save_?.dsk` / `Part?.pak` / `Run.exe`） | `rich2/original/`，或根目錄 `original/` | `RICH2_ORIGINAL` |
+| 遊戲目錄（編輯器實際讀寫的那份，含 `Run.exe.bak`） | `rich2/` | `RICH2_LIVE` |
