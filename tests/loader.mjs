@@ -1,12 +1,6 @@
-// 讓 node 直接跑專案原始碼：專案內的 import 是無副檔名的（Vite 會解析，node 不會），
-// 這裡補上 .ts。只給測試用，不影響建置。
-import { registerHooks } from 'node:module';
+// 讓 node 直接跑專案真正的原始碼（不是鏡像版）。實際的 hook 在 hooks.mjs。
+// 用 register() 而不是 registerHooks()：後者要 Node 22.15+，前者 Node 20.6+ 就有。
+// 只給測試用，不影響建置。
+import { register } from 'node:module';
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier.startsWith('.') && !/\.[cm]?[jt]s$/i.test(specifier)) {
-      try { return nextResolve(specifier + '.ts', context); } catch { /* 落回原本的解析 */ }
-    }
-    return nextResolve(specifier, context);
-  },
-});
+register('./hooks.mjs', import.meta.url);

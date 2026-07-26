@@ -1,5 +1,7 @@
 // 直接匯入專案真正的原始碼來測（不是鏡像版）
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import iconv from 'iconv-lite';
 import { History } from '../src/core/history.ts';
 import {
@@ -8,11 +10,12 @@ import {
 } from '../src/core/integrity.ts';
 import { LOC_FIELDS, LAND_TILES, MARKER_TILE } from '../src/config/constants.ts';
 
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skipped = 0;
 function check(name: string, cond: boolean, extra = '') {
   if (cond) { pass++; console.log(`  ✅ ${name}`); }
   else { fail++; console.log(`  ❌ ${name} ${extra}`); }
 }
+function skip(name: string, why: string) { skipped++; console.log(`  ⏭ ${name}（略過：${why}）`); }
 function eq(name: string, got: unknown, want: unknown) {
   check(name, JSON.stringify(got) === JSON.stringify(want), `期望 ${JSON.stringify(want)}，得到 ${JSON.stringify(got)}`);
 }
@@ -45,12 +48,30 @@ function load(dskPath: string, pakPath: string) {
   for (let i = 0; i < 1296; i++) grid[i] = gr.readUInt16LE(i * 2);
   return { grid, layout, dv, locBytes: loc };
 }
-// 原版基準檔放在 rich2/original/（使用者維護的未修改遊戲檔）。
-// 不放進 repo：那是遊戲原始資料，且 rich2/ 已在 .gitignore 內。
-// LIVE 是編輯器實際讀寫的目錄，內容會一直變，只能用來做「當前狀態」的檢查。
-const R = 'D:/Dev/RICH2_EDITOR/rich2/original';
-const LIVE = 'D:/Dev/RICH2_EDITOR/rich2';
-const ROOT = 'D:/Dev/RICH2_EDITOR';
+// 路徑一律從這個檔案往上推 repo 根目錄，不寫死磁碟機代號（Windows / Linux 都要能跑）。
+const ROOT = path.resolve(fileURLToPath(import.meta.url), '../..');
+
+// R = 原版基準檔（使用者維護的未修改遊戲檔），慣例放 rich2/original/，也接受根目錄的 original/。
+// 不放進 repo：那是遊戲原始資料，rich2/ 與 original/ 都已在 .gitignore 內。
+// LIVE = 編輯器實際讀寫的遊戲目錄，內容會一直變，只能用來做「當前狀態」的檢查。
+// 兩者都可用環境變數覆蓋：RICH2_ORIGINAL / RICH2_LIVE。
+// 有設環境變數就只認它（打錯路徑要看得出來，不要默默退回預設值）。
+const dirOr = (env: string | undefined, ...cands: string[]): string | null =>
+  (env ? [env] : cands).find(d => fs.existsSync(d)) ?? null;
+const R = dirOr(process.env.RICH2_ORIGINAL, `${ROOT}/rich2/original`, `${ROOT}/original`);
+const LIVE = dirOr(process.env.RICH2_LIVE, `${ROOT}/rich2`);
+
+const NO_ORIG = '找不到原版基準檔，請放在 rich2/original/ 或 original/，或設 RICH2_ORIGINAL';
+const NO_LIVE = '找不到遊戲目錄，請放在 rich2/，或設 RICH2_LIVE';
+// 缺檔就回 null 讓呼叫端印略過，而不是整份測試炸掉——基準檔不在 repo 內，本來就可能不存在。
+function loadMap(base: string | null, dsk: string, pak: string) {
+  if (!base) return null;
+  const d = `${base}/${dsk}.dsk`, p = `${base}/${pak}.pak`;
+  return fs.existsSync(d) && fs.existsSync(p) ? load(d, p) : null;
+}
+function readIfExists(file: string | null): Buffer | null {
+  return file && fs.existsSync(file) ? fs.readFileSync(file) : null;
+}
 
 // ==================== 1. History ====================
 console.log('\n=== 1. History（復原/重做）===');
@@ -125,9 +146,11 @@ console.log('\n=== 2. 快照 capture/apply 對 TypedArray 的正確性 ===');
 // ==================== 3. 路由重算（真實地圖）====================
 console.log('\n=== 3. recomputeRouting（真實資料）===');
 for (const [name, d, p] of [['台灣', 'Save_7', 'Part1'], ['香港', 'Save_8', 'Part2'], ['城', 'Save_9', 'Part3']] as const) {
-  const { grid, dv } = load(`${R}/${d}.dsk`, `${R}/${p}.pak`);
-  const dry = recomputeRouting(grid, dv, { dryRun: true });
+  const m = loadMap(R, d, p);
   const label = `原版${name}`;
+  if (!m) { skip(`${label} 路由檢查`, NO_ORIG); continue; }
+  const { grid, dv } = m;
+  const dry = recomputeRouting(grid, dv, { dryRun: true });
   if (name === '城') {
     check(`${label} repair 只修原廠壞掉的 4 格`, dry.b.brokenBefore.length === 4 && dry.b.changed.length === 3,
       `brokenBefore=${dry.b.brokenBefore} changed=${dry.b.changed}`);
@@ -138,8 +161,12 @@ for (const [name, d, p] of [['台灣', 'Save_7', 'Part1'], ['香港', 'Save_8', 
   check(`${label} 入口格唯一`, findRoutingEntries(grid, dv).jail.length === 1 && findRoutingEntries(grid, dv).hospital.length === 1);
   check(`${label} dryRun 不動原始資料`, dv.getUint16(LOC_FIELDS.UNKA + 2, true) !== undefined);
 }
+// 這組是使用者放在 repo 根目錄、路由被改壞的台灣圖（固定樣本，值寫死才有意義）。
 {
-  const { grid, dv } = load(`${ROOT}/Save_7.dsk`, `${ROOT}/Part1.pak`);
+  const m = loadMap(ROOT, 'Save_7', 'Part1');
+  if (!m) skip('使用者台灣：路由修復', '根目錄缺 Save_7.dsk / Part1.pak');
+  else {
+  const { grid, dv } = m;
   const before = recomputeRouting(grid, dv, { dryRun: true });
   eq('使用者台灣：UNKA 壞掉的格子', before.a.brokenBefore, [40, 117, 118, 119]);
   eq('使用者台灣：UNKB 壞掉的格子', before.b.brokenBefore, [40, 117, 118, 119]);
@@ -148,18 +175,22 @@ for (const [name, d, p] of [['台灣', 'Save_7', 'Part1'], ['香港', 'Save_8', 
   const again = recomputeRouting(grid, dv, { dryRun: true });
   check('再跑一次不會再改（冪等）', again.a.changed.length === 0 && again.b.changed.length === 0,
     `A改${again.a.changed.length} B改${again.b.changed.length}`);
+  }
 }
 
 // ==================== 4. 編號配置 ====================
 console.log('\n=== 4. nextLandId / findMarkerBase（真實資料）===');
 {
-  const tw = load(`${R}/Save_7.dsk`, `${R}/Part1.pak`);
-  const twLive = load(`${LIVE}/Save_7.dsk`, `${LIVE}/Part1.pak`);
-  const hk = load(`${R}/Save_8.dsk`, `${R}/Part2.pak`);
-  const rc = load(`${R}/Save_9.dsk`, `${R}/Part3.pak`);
+  const tw = loadMap(R, 'Save_7', 'Part1');
+  const twLive = loadMap(LIVE, 'Save_7', 'Part1');
+  const hk = loadMap(R, 'Save_8', 'Part2');
+  const rc = loadMap(R, 'Save_9', 'Part3');
+  if (!tw || !hk || !rc) skip('nextLandId / findMarkerBase', NO_ORIG);
+  else {
   eq('台灣 nextLandId', nextLandId(tw.grid, tw.dv), 120);
   // 當前地圖會一直變，只驗規則：新編號要接在最大編號之後
-  {
+  if (!twLive) skip('當前台灣地圖 nextLandId', NO_LIVE);
+  else {
     const used = new Set<number>();
     for (const v of twLive.grid) if (v > 0 && v <= MAX_LOC_ID) used.add(v);
     const maxUsed = Math.max(...used);
@@ -185,12 +216,15 @@ console.log('\n=== 4. nextLandId / findMarkerBase（真實資料）===');
     }
     check(`${name} 標記歸屬還原 ${exact}/${total}（其中 ${multi} 格需防呆判斷）`, exact === total);
   }
+  }
 }
 
 // ==================== 5. 圖塊語意 + 完整性檢查 ====================
 console.log('\n=== 5. 圖塊語意與完整性檢查 ===');
 for (const [name, d, p] of [['台灣', 'Save_7', 'Part1'], ['香港', 'Save_8', 'Part2'], ['城', 'Save_9', 'Part3']] as const) {
-  const { grid, layout, dv } = load(`${R}/${d}.dsk`, `${R}/${p}.pak`);
+  const m = loadMap(R, d, p);
+  if (!m) { skip(`原版${name} 圖塊語意`, NO_ORIG); continue; }
+  const { grid, layout, dv } = m;
   let landTileBad = 0, markerTileBad = 0;
   for (let i = 0; i < 1296; i++) {
     const id = grid[i], t = layout[i];
@@ -206,7 +240,10 @@ for (const [name, d, p] of [['台灣', 'Save_7', 'Part1'], ['香港', 'Save_8', 
 // ==================== 5b. forceIds：新格子一律重算 ====================
 console.log('\n=== 5b. forceIds（新格子不保留碰巧能通的佔位值）===');
 {
-  const { grid, dv } = load(`${R}/Save_8.dsk`, `${R}/Part2.pak`);
+  const m = loadMap(R, 'Save_8', 'Part2');
+  if (!m) skip('forceIds', NO_ORIG);
+  else {
+  const { grid, dv } = m;
   // 香港某格。repair 模式不該動它（它走得通）
   const before = dv.getUint16(LOC_FIELDS.UNKA + 54 * 2, true);
   const plain = recomputeRouting(grid, dv, { dryRun: true });
@@ -217,6 +254,7 @@ console.log('\n=== 5b. forceIds（新格子不保留碰巧能通的佔位值）=
   check('指定 forceIds 後會重新評估格子 54',
     wouldChange || before === 1, `before=${before} changed=${forced.a.changed}`);
   eq('dryRun 不會動到原始資料', dv.getUint16(LOC_FIELDS.UNKA + 54 * 2, true), before);
+  }
 }
 
 // ==================== 5c. 地段名稱排版 ====================
@@ -240,7 +278,8 @@ console.log('\n=== 5c. 地段名稱排版（改名要照原版格式）===');
 
   // 拿原版三張圖的實際名稱驗：解碼成文字後應為 13 空白 + 3 字寬，且丟進正規化原樣不變
   for (const [name, pak] of [['台灣', 'Part1'], ['香港', 'Part2'], ['大富翁城', 'Part3']] as const) {
-    const buf = fs.readFileSync(`${R}/${pak}.pak`);
+    const buf = readIfExists(R && `${R}/${pak}.pak`);
+    if (!buf) { skip(`原版${name} 地段名排版`, NO_ORIG); continue; }
     const lines = iconv.decode(decompress(buf, ptrs(buf)[2]), 'big5').split('\r');
     let shaped = 0, unchanged = 0, total = 0;
     const bad: string[] = [];
@@ -264,7 +303,9 @@ console.log('\n=== 5c. 地段名稱排版（改名要照原版格式）===');
 console.log('\n=== 5d. 地段序號 renumberSegment ===');
 {
   for (const [name, d, p] of [['台灣', 'Save_7', 'Part1'], ['香港', 'Save_8', 'Part2'], ['城', 'Save_9', 'Part3']] as const) {
-    const { grid, dv } = load(`${R}/${d}.dsk`, `${R}/${p}.pak`);
+    const m = loadMap(R, d, p);
+    if (!m) { skip(`原版${name} 地段序號`, NO_ORIG); continue; }
+    const { grid, dv } = m;
     const segs = new Set<number>();
     for (const v of grid) {
       if (v > 0 && v <= MAX_LOC_ID) {
@@ -278,7 +319,10 @@ console.log('\n=== 5d. 地段序號 renumberSegment ===');
   }
 
   // 中間插入：新編號不是最大值時，後面的要往後推
-  const { grid, dv } = load(`${R}/Save_7.dsk`, `${R}/Part1.pak`);
+  const tw = loadMap(R, 'Save_7', 'Part1');
+  if (!tw) skip('地段序號寫壞後可修回', NO_ORIG);
+  else {
+  const { grid, dv } = tw;
   const seg = dv.getUint16(LOC_FIELDS.SEGMENT + 54 * 2, true);   // 台北市
   const before: number[] = [];
   for (let id = 1; id <= MAX_LOC_ID; id++) {
@@ -295,6 +339,7 @@ console.log('\n=== 5d. 地段序號 renumberSegment ===');
   eq('序號被寫壞後，重編號會修回正確值',
     dv.getUint16(LOC_FIELDS.UNK9 + last * 2, true), before.length);
   check('只改動被寫壞的那一格', fixed.length === 1 && fixed[0] === last, `changed=${fixed}`);
+  }
 }
 
 // ==================== 6. 特殊地點數推算 ====================
@@ -303,8 +348,8 @@ console.log('\n=== 5d. 地段序號 renumberSegment ===');
 console.log('\n=== 6. 特殊地點數（[0x1098]）推算 ===');
 {
   // 原版圖要跟「原版 exe」比；活的地圖才跟「目前的 exe」比。
-  const exeOrig = fs.readFileSync(`${R}/Run.exe`);
-  const exeLive = fs.readFileSync(`${LIVE}/Run.exe`);
+  const exeOrig = readIfExists(R && `${R}/Run.exe`);
+  const exeLive = readIfExists(LIVE && `${LIVE}/Run.exe`);
   const cases = [
     { name: '台灣', dsk: 'Save_7', pak: 'Part1', off: 0x124b0 },
     { name: '台灣(當前地圖)', dsk: 'Save_7', pak: 'Part1', off: 0x124b0, live: true },
@@ -312,8 +357,10 @@ console.log('\n=== 6. 特殊地點數（[0x1098]）推算 ===');
     { name: '大富翁城', dsk: 'Save_9', pak: 'Part3', off: 0x124e4 },
   ];
   for (const c of cases) {
-    const base = (c as { live?: boolean }).live ? LIVE : R;
-    const { grid, dv } = load(`${base}/${c.dsk}.dsk`, `${base}/${c.pak}.pak`);
+    const live = (c as { live?: boolean }).live === true;
+    const m = loadMap(live ? LIVE : R, c.dsk, c.pak);
+    if (!m) { skip(`${c.name} 特殊地點數`, live ? NO_LIVE : NO_ORIG); continue; }
+    const { grid, dv } = m;
     const cnt = new Map<number, number>();
     for (const v of grid) if (v > 0 && v <= 49) cnt.set(v, (cnt.get(v) || 0) + 1);
 
@@ -322,12 +369,13 @@ console.log('\n=== 6. 特殊地點數（[0x1098]）推算 ===');
     let bySpecialFlag = 0;
     for (const [id] of cnt) if (dv.getUint16(LOC_FIELDS.SPECIAL + id * 2, true) > 0 && id > bySpecialFlag) bySpecialFlag = id;
 
-    const live = (c as { live?: boolean }).live === true;
-    const want = (live ? exeLive : exeOrig).readUInt16LE(c.off);
+    const exe = live ? exeLive : exeOrig;
+    const want = exe ? exe.readUInt16LE(c.off) : null;
 
     // 原版圖：推算值必須等於 exe。使用者當前的地圖會領先 exe（改了地圖還沒存回），
     // 所以只驗結構規則，並把差異印出來當提醒。
-    if (!live) eq(`${c.name}：用佔格數推算 = exe 實際值`, byCells, want);
+    if (want === null) skip(`${c.name}：推算值 = exe 實際值`, `找不到 ${live ? 'LIVE' : '原版'} Run.exe`);
+    else if (!live) eq(`${c.name}：用佔格數推算 = exe 實際值`, byCells, want);
     else if (byCells !== want) {
       console.log(`  ℹ ${c.name}（當前地圖）：地圖有 ${byCells} 個特殊地點，但 exe 寫 ${want}` +
         ` → 編號 ${want + 1}~${byCells} 在遊戲裡不會被當成特殊地點。按「自動」再存檔即可。`);
@@ -339,7 +387,8 @@ console.log('\n=== 6. 特殊地點數（[0x1098]）推算 ===');
     check(`${c.name}：1~${byCells} 全部佔 4 格、之後沒有佔 4 格的`, inside.length === 0 && outside.length === 0,
       `inside=${inside} outside=${outside}`);
     if (c.name === '大富翁城') {
-      check('大富翁城：舊的 SPECIAL>0 寫法會算錯（回歸測試）', bySpecialFlag !== want,
+      if (want === null) skip('大富翁城：舊的 SPECIAL>0 寫法會算錯（回歸測試）', '找不到原版 Run.exe');
+      else check('大富翁城：舊的 SPECIAL>0 寫法會算錯（回歸測試）', bySpecialFlag !== want,
         `舊寫法 ${bySpecialFlag}、正確 ${want}`);
     }
   }
@@ -348,15 +397,19 @@ console.log('\n=== 6. 特殊地點數（[0x1098]）推算 ===');
 // ==================== 7. exe patch 狀態 ====================
 console.log('\n=== 7. Run.exe patch 狀態 ===');
 {
-  const cur = fs.readFileSync(`${LIVE}/Run.exe`);
-  const bak = fs.readFileSync(`${LIVE}/Run.exe.bak`);
+  const cur = readIfExists(LIVE && `${LIVE}/Run.exe`);
+  const bak = readIfExists(LIVE && `${LIVE}/Run.exe.bak`);
+  if (!cur || !bak) skip('Run.exe patch 狀態', cur ? '找不到 Run.exe.bak（還沒 patch 過）' : NO_LIVE);
+  else {
   // maxLocId 只要 ≥ 該圖實際用到的最大編號即可（不必一律 282；開太大會讓引擎把空記錄也當合法地點）
   for (const [name, off, dsk, pak, live] of [
     ['台灣', 0x124aa, 'Save_7', 'Part1', true],
     ['香港', 0x124c4, 'Save_8', 'Part2', false],
     ['大富翁城', 0x124de, 'Save_9', 'Part3', false],
   ] as const) {
-    const { grid } = load(`${live ? LIVE : R}/${dsk}.dsk`, `${live ? LIVE : R}/${pak}.pak`);
+    const m = loadMap(live ? LIVE : R, dsk, pak);
+    if (!m) { skip(`${name} maxLocId`, live ? NO_LIVE : NO_ORIG); continue; }
+    const { grid } = m;
     let maxUsed = 0;
     for (const v of grid) if (v > 0 && v <= MAX_LOC_ID && v > maxUsed) maxUsed = v;
     const val = cur.readUInt16LE(off);
@@ -370,7 +423,9 @@ console.log('\n=== 7. Run.exe patch 狀態 ===');
   check('與備份的差異只落在 maxLocId / 特殊數欄位（沒動到玩家數或其他程式碼）',
     diff.every(o => allowed.has(o)), `差異位置 ${diff.map(o => '0x' + o.toString(16)).join(',')}`);
   eq('檔案大小未變（EXEPACK 固定長度）', cur.length, bak.length);
+  }
 }
 
-console.log(`\n${'='.repeat(50)}\n通過 ${pass}　失敗 ${fail}`);
+console.log(`\n${'='.repeat(50)}\n通過 ${pass}　失敗 ${fail}` + (skipped ? `　略過 ${skipped}` : ''));
+if (skipped) console.log(`原版基準檔 ${R ?? '(缺)'}　遊戲目錄 ${LIVE ?? '(缺)'}`);
 process.exit(fail ? 1 : 0);
