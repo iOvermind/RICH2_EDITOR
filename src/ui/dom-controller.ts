@@ -139,13 +139,34 @@ function unsupportedChars(name: string): BadChar[] {
   return bad;
 }
 
-/** 把缺字講成一句人看得懂的話。 */
-function unsupportedMsg(bad: BadChar[]): string {
+/**
+ * 算出這個名稱在遊戲裡**實際會顯示成什麼**。
+ * 規則就是上面那兩條，四個實測案例全中：
+ *   深水灣→邦水灣、鰂魚湧→o邦邦、苗栗縣→邦邦縣、銅鑼灣→銅鑼灣（正常）。
+ */
+function previewInGame(name: string): string {
+  if (charTable.length === 0) return name;
+  const tail = charTable[charTable.length - 1];
+  let out = '';
+  for (const ch of name) {
+    if (!HAN.test(ch)) { out += ch; continue; }
+    const b5 = iconv.encode(ch, 'big5');
+    if (b5.length === 2 && b5[0] < BIG5_LEAD_MIN) {
+      out += b5[1] >= 0x20 && b5[1] < 0x7f ? String.fromCharCode(b5[1]) : '?';
+    } else {
+      out += gameCharset.has(ch) ? ch : tail;
+    }
+  }
+  return out;
+}
+
+/** 把缺字講成一句人看得懂的話。傳入原名稱就會順便把「遊戲實際顯示的樣子」印出來。 */
+function unsupportedMsg(bad: BadChar[], badName = ''): string {
   if (bad.length === 0) return '';
   const tail = charTable.length ? charTable[charTable.length - 1] : '';
   const desync = bad.filter(b => b.why === 'desync');
   const miss = bad.filter(b => b.why === 'missing').map(b => b.ch);
-  let s = '';
+  let s = badName ? `　👉 遊戲裡會顯示成「${previewInGame(badName)}」。` : '';
   if (desync.length) {
     const shown = desync.map(b => `「${b.ch}」` + (b.asAscii ? `→「${b.asAscii}」` : '')).join('、');
     s += `　❌ ${shown}：這些是 Big5 罕用字（首位元組 < 0xA1），遊戲不認得雙位元組開頭，` +
@@ -249,7 +270,7 @@ bindLiveField('segNameDisplay', '改地段名稱', (raw) => {
   const el = document.getElementById('segNameDisplay') as HTMLInputElement | null;
   if (el && el.value !== applied) el.value = applied;   // 顯示正規化後的結果
   const bad = unsupportedChars(applied);
-  logMsg(`地段 ${segId} 名稱改為「${applied}」（存檔時寫回 PAK）。` + unsupportedMsg(bad));
+  logMsg(`地段 ${segId} 名稱改為「${applied}」（存檔時寫回 PAK）。` + unsupportedMsg(bad, applied));
   renderPriceTable(segId);
 });
 

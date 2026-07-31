@@ -368,6 +368,27 @@ console.log('\n=== 5c-2. 遊戲字表（Wor.pak，全遊戲共用）===');
     [b5('鰂')[0], b5('鰂')[1], String.fromCharCode(b5('鰂')[1])], [0x91, 0x6f, 'o']);
   eq('「魚」「湧」是正常 Big5（首位元組 ≥ 0xA1），只是不在字表 → 顯示成「邦」',
     ['魚', '湧'].map(c => b5(c)[0] >= 0xa1), [true, true]);
+
+  // 拿字表把「遊戲會顯示成什麼」算出來，跟使用者的四個遊戲內實測對答案
+  if (wor) {
+    let tbl: string[] | null = null;
+    for (const p of ptrs(wor)) { tbl = parseTable(decompress(wor, p)); if (tbl) break; }
+    if (!tbl) skip('遊戲顯示預測', '認不出字表');
+    else {
+      const T = tbl, has = new Set(T);
+      const tail = T[T.length - 1];
+      const predict = (name: string) => [...name].map(ch => {
+        const b = b5(ch);
+        if (b.length === 2 && b[0] < 0xa1) return b[1] >= 0x20 && b[1] < 0x7f ? String.fromCharCode(b[1]) : '?';
+        return has.has(ch) ? ch : tail;
+      }).join('');
+      // 使用者在遊戲裡親眼看到的四組，全部要對上
+      eq('預測「深水灣」→ 邦水灣', predict('深水灣'), '邦水灣');
+      eq('預測「鰂魚湧」→ o邦邦', predict('鰂魚湧'), 'o邦邦');
+      eq('預測「苗栗縣」→ 邦邦縣', predict('苗栗縣'), '邦邦縣');
+      eq('預測「銅鑼灣」→ 銅鑼灣（正常）', predict('銅鑼灣'), '銅鑼灣');
+    }
+  }
         // 尾段 597~638 是香港專屬（銅鑼灣、恆、匯、怡、鴻、永邦…），台灣與城完全沒用到。
         // 548~596 主要是台灣的（澎湖、基隆、宏碁…），但香港也共用了 台基隆澳東嘉竹泰 幾個字，
         // 所以只有香港那段是乾淨的專屬區——這也正好解釋為什麼香港的上界最高。
