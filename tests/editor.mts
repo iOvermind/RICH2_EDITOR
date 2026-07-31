@@ -8,7 +8,7 @@ import {
   recomputeRouting, nextLandId, findMarkerBase, findRoutingEntries,
   analyzeIntegrity, renumberSegment, MAX_LOC_ID,
   scanSpecials, specialKindOfTile, specialTilesOfKind, placeSpecial,
-  scanSeaRoads, repairSeaRoads, SEA_ROAD_ID_MAX,
+  scanSeaRoads, repairSeaRoads, SEA_ROAD_ID_MAX, deleteLocation,
 } from '../src/core/integrity.ts';
 import { LOC_FIELDS, LAND_TILES, MARKER_TILE } from '../src/config/constants.ts';
 
@@ -792,6 +792,68 @@ console.log('\n=== 6f. 修復海路 ===');
     [g(LOC_FIELDS.X, 24), g(LOC_FIELDS.Y, 24), g(LOC_FIELDS.LEFT, 24), g(LOC_FIELDS.RIGHT, 24)], [6, 16, 53, 25]);
   eq('修完 39 號 下→15（接特殊地點的頭尾連接沒被動到）', g(LOC_FIELDS.DOWN, 39), 15);
   check(`海路上限是 ${SEA_ROAD_ID_MAX}`, SEA_ROAD_ID_MAX === 50);
+  }
+}
+
+// ==================== 6c. 刪除地點 ====================
+// 「刪除」在編輯器裡是圖塊驅動的：貼一個沒有地點語意的圖塊（不是 1 / 9~14 / 40~83 / 84）
+// 就等於把那格的地點刪掉。核心是 deleteLocation()，要一次清乾淨四件事：
+// grid 格、+950 購地標記格、記錄整筆、以及**所有指向它的方向指標**。
+// 最後那項最容易漏 —— 漏了就會留下 dangling ref，引擎照方向走會跳進一筆全 0 的記錄。
+console.log('\n=== 6c. 刪除地點 deleteLocation ===');
+{
+  const m = loadMap(R, 'Save_7', 'Part1');
+  if (!m) skip('刪除地點', NO_ORIG);
+  else {
+    const { grid, dv } = m;
+    const g = (f: number, id: number) => dv.getUint16(f + id * 2, true);
+    // 挑一個有購地標記、也有地段的土地
+    const cm = new Map<number, number[]>();
+    for (let i = 0; i < grid.length; i++) if (grid[i] > 0) (cm.get(grid[i]) ?? cm.set(grid[i], []).get(grid[i])!).push(i);
+    const target = [...cm.keys()].find(id => id >= 51 && id <= MAX_LOC_ID && cm.has(id + 950) && g(LOC_FIELDS.SEGMENT, id) > 0)!;
+    check(`挑到有標記也有地段的土地 ${target}`, target != null, `${target}`);
+
+    const seg = g(LOC_FIELDS.SEGMENT, target);
+    const refsBefore: number[] = [];
+    for (let id = 1; id <= MAX_LOC_ID; id++) {
+      for (const f of [LOC_FIELDS.LEFT, LOC_FIELDS.UP, LOC_FIELDS.RIGHT, LOC_FIELDS.DOWN]) {
+        if (id !== target && g(f, id) === target) refsBefore.push(id);
+      }
+    }
+    check(`刪之前有 ${refsBefore.length} 個方向指標指著它`, refsBefore.length > 0, `${refsBefore.length}`);
+
+    const rep = deleteLocation(grid, dv, target)!;
+    check('回傳報告', rep != null);
+    eq('回報的地段就是它原本的地段', rep.segId, seg);
+    eq('購地標記一併清掉', rep.markerId, target + 950);
+    eq('清掉的方向指標數量對得上', rep.clearedRefs.length, refsBefore.length);
+
+    // grid 兩種編號都不該再出現
+    let left = 0;
+    for (const v of grid) if (v === target || v === target + 950) left++;
+    eq('grid 裡本體與標記格都清光', left, 0);
+
+    // 記錄整筆歸 0（含座標、地段、四方向、UNK9、UNKA/UNKB）
+    const fields = [LOC_FIELDS.X, LOC_FIELDS.Y, LOC_FIELDS.SPECIAL, LOC_FIELDS.UNK3,
+      LOC_FIELDS.LEFT, LOC_FIELDS.UP, LOC_FIELDS.RIGHT, LOC_FIELDS.DOWN,
+      LOC_FIELDS.SEGMENT, LOC_FIELDS.UNK9, LOC_FIELDS.UNKA, LOC_FIELDS.UNKB];
+    eq('記錄整筆歸 0', fields.map(f => g(f, target)), fields.map(() => 0));
+
+    // 沒有人再指向它
+    let dangling = 0;
+    for (let id = 1; id <= MAX_LOC_ID; id++) {
+      for (const f of [LOC_FIELDS.LEFT, LOC_FIELDS.UP, LOC_FIELDS.RIGHT, LOC_FIELDS.DOWN]) {
+        if (g(f, id) === target) dangling++;
+      }
+    }
+    eq('沒有任何方向指標還指著被刪的編號', dangling, 0);
+
+    // 刪掉之後那個編號要能重新配出來
+    check(`編號 ${target} 變回可用`, nextLandId(grid, dv, 49) > 0);
+    const before9 = [...cm.keys()].filter(id => id !== target && id <= MAX_LOC_ID && g(LOC_FIELDS.SEGMENT, id) === seg);
+    renumberSegment(grid, dv, seg);
+    const nums = before9.map(id => g(LOC_FIELDS.UNK9, id)).sort((a, b) => a - b);
+    eq('原地段重編後序號是連續的 1..n', nums, before9.map((_, i) => i + 1));
   }
 }
 

@@ -10,10 +10,10 @@ import {
 import { replaceGroupInDsk, rebuildDskBufferCore, parsePackPointers } from '../core/parser';
 import { Workspace } from '../core/workspace';
 import {
-  analyzeIntegrity, repairMap, findFreeLandId, nextLandId, findMarkerBase,
+  analyzeIntegrity, repairMap, findFreeLandId, nextLandId, findMarkerBase, deleteLocation,
   wireDirectionsFromGrid, recomputeRouting, renumberSegment, type RoutingReport,
   scanSpecials, specialTilesOfKind, placeSpecial, type IntegrityOptions,
-  scanSeaRoads, repairSeaRoads, fmtRange,
+  scanSeaRoads, repairSeaRoads, fmtRange, MAX_LOC_ID,
 } from '../core/integrity';
 import {
   MAPS, CHAR_TABLE_FILE, isSupported as fsSupported, hasFolder, pickGameFolder,
@@ -834,7 +834,12 @@ let lastAddedLandId = -1;
 interface AssignResult {
   land?: number;     // 新配出的土地編號
   marker?: number;   // 新配出的購地標記編號
+  deleted?: number;  // 被刪掉的地點編號（貼上沒有地點語意的圖塊）
+  skipped?: number;  // 這格本來就有編號，只換了圖塊沒重配（不是錯誤，但多格模式要講）
+  segId?: number;    // 被刪掉的那個地點原本的地段，收尾時要重編序號
   error?: string;    // 沒配成的原因
+  /** 圖塊沒換成（呼叫端要把 mapLayout 還原），例如編號用完 */
+  revert?: boolean;
 }
 
 /** 還剩幾個可用的土地編號（51~282 之間全空的號碼）。 */
@@ -863,15 +868,15 @@ function autoAssignByTile(
 
   if (LAND_TILES.includes(tile)) {
     if (cur > MARKER_ID_OFFSET) {
-      const e = `目前是購地標記 ${cur}，要放土地請先把地點編號清成 0`;
-      say(`⚠ (${gx},${gy}) ${e}。`); return { error: e };
+      const e = `目前是購地標記 ${cur}，要放土地請先清掉它`;
+      say(`⚠ (${gx},${gy}) ${e}。`); return { error: e, revert: true };
     }
-    if (cur > 0) { say(`(${gx},${gy}) 已經是地點 ${cur}，只換圖塊、不重配編號。`); return {}; }
+    if (cur > 0) { say(`(${gx},${gy}) 已經是地點 ${cur}，只換圖塊、不重配編號。`); return { skipped: cur }; }
 
     const id = nextLandId(workspace.mapGrid, locDataView, getSpecialBoundary());
     if (id < 0) {
-      const e = '沒有可用的土地編號了（已達 282 上限）';
-      say(`❌ ${e}。`); return { error: e };
+      const e = `沒有可用的土地編號了（51~${MAX_LOC_ID} 全被佔用）`;
+      say(`❌ ${e}　—— 圖塊沒有換，請先刪掉用不到的地點。`); return { error: e, revert: true };
     }
 
     workspace.mapGrid[ci] = id;
@@ -902,7 +907,7 @@ function autoAssignByTile(
       const e = r.taken.length > 0
         ? `旁邊的土地 ${r.taken.join('、')} 都已經有自己的購地標記了`
         : '四周找不到土地（編號 ≥51），請先在旁邊放圖塊 9~14';
-      say(`❌ (${gx},${gy}) ${e}。`); return { error: e };
+      say(`❌ (${gx},${gy}) ${e}。`); return { error: e, revert: true };
     }
     const markerId = r.base + MARKER_ID_OFFSET;
     workspace.mapGrid[ci] = markerId;
@@ -919,6 +924,33 @@ function autoAssignByTile(
     }
     if (!opts.deferRouting) runValidation();
     return { marker: markerId };
+  }
+
+  // 剩下的圖塊都沒有地點語意（風景、水面、裝飾…）—— 貼上去就等於**把這格的地點刪掉**。
+  // 刪除與新增走同一個入口：貼有語意的圖塊＝建立，貼沒語意的＝刪除，不必另外做 UI。
+  if (cur > 0) {
+    const target = cur > MARKER_ID_OFFSET ? cur - MARKER_ID_OFFSET : cur;
+    // 貼在購地標記格上：只清那一格，別把整塊土地連坐刪掉
+    if (cur > MARKER_ID_OFFSET) {
+      workspace.mapGrid[ci] = 0;
+      say(`🗑 (${gx},${gy}) 清掉土地 ${target} 的購地標記。`);
+      if (!opts.deferRouting) runValidation();
+      return { deleted: cur };
+    }
+    const rep = deleteLocation(workspace.mapGrid, locDataView, cur);
+    if (!rep) { const e = `地點 ${cur} 刪不掉`; say(`⚠ (${gx},${gy}) ${e}。`); return { error: e }; }
+    if (lastAddedLandId === cur) lastAddedLandId = -1;
+    say(`🗑 (${gx},${gy}) 已刪除地點 ${cur}：清掉 ${rep.cells.length} 格` +
+      (rep.markerId ? `（含購地標記 ${rep.markerId}）` : '') +
+      `、記錄整筆歸 0` +
+      (rep.clearedRefs.length ? `、清掉 ${rep.clearedRefs.length} 個指向它的方向指標（${rep.clearedRefs.slice(0, 6).map(r => `${r.id}的${r.dir}`).join('、')}${rep.clearedRefs.length > 6 ? '…' : ''}）` : '') +
+      '。');
+    if (!opts.deferRouting) {
+      if (rep.segId > 0) renumberSegment(workspace.mapGrid, locDataView, rep.segId);
+      recomputeRouting(workspace.mapGrid, locDataView, { boundary: getSpecialBoundary() });
+      runValidation();
+    }
+    return { deleted: cur, segId: rep.segId };
   }
   return {};
 }
@@ -1167,25 +1199,46 @@ function applyTileToSelection(tile: number): void {
   mark(multi ? `貼圖塊 ${tile} 到 ${cells.length} 格` : `貼圖塊 ${tile}`);
 
   const lands: number[] = [], markers: number[] = [], errors: string[] = [];
+  const deleted: number[] = [], skipped: number[] = [], dirtySegs = new Set<number>();
+  let reverted = 0;
   for (const ci of cells) {
     const gx = ci % GRID_COLS, gy = Math.floor(ci / GRID_COLS);
+    const prevTile = workspace.mapLayout[ci];
     workspace.mapLayout[ci] = tile;
     const r = autoAssignByTile(tile, gx, gy, { quiet: multi, deferRouting: true });
+    // 配不到編號就把圖塊還原 —— 留下一塊「看起來是土地、其實沒有編號」的格子，
+    // 畫面上跟成功完全一樣，這正是最容易被當成靜默失敗的地方。
+    if (r.revert) { workspace.mapLayout[ci] = prevTile; reverted++; }
     if (r.land != null) lands.push(r.land);
     if (r.marker != null) markers.push(r.marker);
+    if (r.deleted != null) deleted.push(r.deleted);
+    if (r.skipped != null) skipped.push(r.skipped);
+    if (r.segId) dirtySegs.add(r.segId);
     if (r.error) errors.push(`(${gx},${gy}) ${r.error}`);
   }
 
   if (multi) {
-    let msg = `🖌 圖塊 ${tile} 已套用到 ${cells.length} 格`;
+    let msg = `🖌 圖塊 ${tile} 已套用到 ${cells.length - reverted} 格`;
     if (lands.length) msg += `；新增土地 ${lands.length} 塊（${lands.join('、')}）`;
     if (markers.length) msg += `；新增購地標記 ${markers.length} 個`;
+    if (deleted.length) msg += `；🗑 刪除地點 ${deleted.length} 個（${deleted.slice(0, 12).join('、')}${deleted.length > 12 ? '…' : ''}）`;
+    if (skipped.length) msg += `；${skipped.length} 格本來就有編號，只換圖塊`;
+    if (reverted) msg += `；⚠ ${reverted} 格沒換成、圖塊已還原`;
     logMsg(msg);
     if (errors.length) {
       logMsg(`　⚠ 有 ${errors.length} 格沒配到編號：`);
       errors.slice(0, 8).forEach(m => logMsg('　　' + m));
       if (errors.length > 8) logMsg(`　　…還有 ${errors.length - 8} 格`);
     }
+  }
+
+  // 刪除的收尾：所有格子都處理完才做一次，中途做會被還沒刪完的狀態干擾
+  if (deleted.length && locDataView) {
+    for (const seg of dirtySegs) if (seg > 0) renumberSegment(workspace.mapGrid, locDataView, seg);
+    const rep = recomputeRouting(workspace.mapGrid, locDataView, { boundary: getSpecialBoundary() });
+    logMsg(`　刪除收尾：重編 ${dirtySegs.size} 個地段的序號(UNK9)` +
+      (rep.ok ? `、路由重算（UNKA 修正 ${rep.a.changed.length} 格、UNKB 修正 ${rep.b.changed.length} 格）` : '') +
+      `；剩餘可用編號 ${freeLandIdCount()} 個。`);
   }
 
   if (lands.length && locDataView) {
@@ -1864,6 +1917,15 @@ async function loadMapFromFolder(idx: number): Promise<void> {
     if (statusMap) statusMap.textContent = m.name;
     logMsg(`已從遊戲資料夾載入【${m.name}】：${m.pak} + ${m.dsk}` +
       `（圖塊 ${workspace.mapTilesData.length / 480} 個、地段 ${workspace.segmentNames.length - 1} 個、${locDataView ? '地點資料已就緒' : '⚠ 地點資料讀取失敗'}）`);
+    // 「還能不能加地點」是硬上限（引擎的 loc 陣列只有 283 格），一載入就先講，
+    // 別讓人貼了半天圖塊才發現配不到編號 —— 大富翁城原版就是 0 個可用。
+    if (locDataView) {
+      const free = freeLandIdCount();
+      logMsg(free > 0
+        ? `　可用地點編號還有 ${free} 個（51~${MAX_LOC_ID}）。`
+        : `　⚠ 可用地點編號 0 個 —— 51~${MAX_LOC_ID} 已全被佔用，這張圖<b>加不了新地點</b>，` +
+          `要新增請先貼一個沒有地點語意的圖塊把用不到的地點刪掉。`);
+    }
     // 讀 exe 目前的特殊地點數，顯示到欄位
     try {
       const sc = await readSpecialCount(idx);

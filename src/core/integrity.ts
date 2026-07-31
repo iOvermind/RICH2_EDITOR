@@ -731,6 +731,61 @@ export function renameLocation(grid: Uint16Array, dv: DataView, oldId: number, n
     return true;
 }
 
+export interface DeleteReport {
+    locId: number;
+    /** 被清成 0 的 grid 格 index（含 +950 購地標記格） */
+    cells: number[];
+    /** 一併清掉的購地標記編號（土地才有） */
+    markerId: number;
+    /** 被清掉的方向指標：誰的哪個方向本來指著它 */
+    clearedRefs: { id: number; dir: string }[];
+    /** 它原本所屬的地段（呼叫端拿去 renumberSegment；0＝沒有地段） */
+    segId: number;
+}
+
+/**
+ * 把一個地點整個刪掉：grid 格、購地標記格、記錄、以及**所有指向它的方向指標**。
+ *
+ * 少了最後一步就會留下 dangling ref —— 引擎照著方向走會跳到一筆全 0 的記錄，
+ * 那正是 analyzeIntegrity 的 `dangling-ref` 在抓的東西。單純把 grid 格改成 0
+ * （編輯器原本唯一的「刪除」方式）只清掉了畫面，資料全部留在原地。
+ *
+ * 不負責重編地段序號與重算路由 —— 那兩件事要在所有刪除都做完之後再一次做，
+ * 否則每刪一格就重算一次，中間狀態還會互相干擾。回傳的 `segId` 就是給呼叫端收尾用的。
+ */
+export function deleteLocation(grid: Uint16Array, dv: DataView, locId: number): DeleteReport | null {
+    if (locId <= 0 || locId >= LOC_COUNT) return null;
+    const rep: DeleteReport = {
+        locId, cells: [], markerId: 0, clearedRefs: [],
+        segId: getF(dv, LOC_FIELDS.SEGMENT, locId),
+    };
+
+    // 1) grid：本體的格子（特殊地點是 2x2，所以可能不只一格）
+    for (let i = 0; i < grid.length; i++) if (grid[i] === locId) { grid[i] = 0; rep.cells.push(i); }
+
+    // 2) grid：它的購地標記格（土地才有；標記編號不進 loc 記錄，只存在 grid 裡）
+    const markerId = locId + MARKER_ID_OFFSET;
+    for (let i = 0; i < grid.length; i++) if (grid[i] === markerId) {
+        grid[i] = 0; rep.cells.push(i); rep.markerId = markerId;
+    }
+
+    // 3) 別人指向它的方向指標
+    for (let id = 1; id < LOC_COUNT; id++) {
+        if (id === locId) continue;
+        for (const d of DIRS) {
+            if (getF(dv, d.field, id) === locId) {
+                setF(dv, d.field, id, 0);
+                rep.clearedRefs.push({ id, dir: d.name });
+            }
+        }
+    }
+
+    // 4) 記錄整筆歸 0（含未使用的保留欄位，不留半筆殘值）
+    for (const f of Object.values(LOC_FIELDS)) setF(dv, f as number, locId, 0);
+
+    return rep;
+}
+
 // 原版三張圖的土地一律從 51 起編，40~50 這段整段刻意不用（台灣/香港缺 40-50、城缺 41-50）。
 // 為免踩到引擎可能對 50 以下另有處理的地雷，配號一律從 51 開始。
 export const LAND_ID_START = 51;
