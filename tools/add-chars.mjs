@@ -4,6 +4,7 @@
  *
  *   node tools/add-chars.mjs 苗 栗          # 加這兩個字
  *   node tools/add-chars.mjs 苗栗宜蘭        # 連在一起也可以
+ *   node tools/add-chars.mjs --force 鰂      # 連 Big5 首位元組 < 0xA1 的罕用字也加（做實驗用）
  *   node tools/add-chars.mjs                # 不給參數＝預設的「苗栗」
  *
  * 背景見 docs/runexe-re.md §7、§8：
@@ -12,7 +13,8 @@
  *   - glyph[i] 對應 table[i]，1:1，Run.exe 裡沒有寫死字數
  *
  * 只重壓被改到的那兩組，其餘四組的壓縮位元組原樣搬過去。
- * 第一次執行會備份成 Wor.pak.bak；之後每次都以 .bak 為輸入，所以重複執行不會疊加。
+ * 第一次執行會備份成 Wor.pak.bak（只當備份，不當輸入 —— 輸入一律是**現況**，
+ * 否則會把編輯器存檔時補進去的字洗掉）。已在表內的字會自動略過，所以重複執行不會疊加。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -33,7 +35,9 @@ const FONT_NAME = 'MingLiU';
 const FONT_PX = 15;
 const DX = 2, DY = -1;
 
-const argChars = [...process.argv.slice(2).join('')].filter(c => /\S/.test(c));
+const args = process.argv.slice(2);
+const FORCE = args.includes('--force');
+const argChars = [...args.filter(a => !a.startsWith('--')).join('')].filter(c => /\S/.test(c));
 const WANT = argChars.length ? argChars : ['苗', '栗'];
 
 // ── 用 .NET GDI+ 把字渲染成點陣 ─────────────────────────────────────────
@@ -151,9 +155,8 @@ function compress(input) {
 }
 
 // ── 讀檔、切出各組 ──────────────────────────────────────────────────────
-const raw = fs.readFileSync(fs.existsSync(BAK) ? BAK : PAK);
+const raw = fs.readFileSync(PAK);
 if (!fs.existsSync(BAK)) { fs.writeFileSync(BAK, raw); console.log(`已備份 → ${BAK}`); }
-else console.log(`（以 ${BAK} 為輸入，重複執行不會疊加）`);
 
 const ptrVals = [];
 for (let p = PTR_BASE; ; p += 2) { const v = raw.readUInt16LE(p); if (v === 0) break; ptrVals.push(v); }
@@ -174,7 +177,12 @@ const add = [], skip = [];
 for (const ch of WANT) {
   const code = iconv.encode(ch, 'big5');
   if (code.length !== 2) throw new Error(`「${ch}」不是 2-byte Big5`);
-  if (code[0] < 0xa1) throw new Error(`「${ch}」的 Big5 首位元組 0x${code[0].toString(16)} < 0xA1，遊戲會排版錯位`);
+  if (code[0] < 0xa1) {
+    // 遊戲實測顯示這種字會排版錯位（「鰂」→「o」），加進字表照理沒用。
+    // --force 是拿來驗證這個前提的：真的加下去，看遊戲畫不畫得出來。
+    if (!FORCE) throw new Error(`「${ch}」的 Big5 首位元組 0x${code[0].toString(16)} < 0xA1，遊戲會排版錯位（要實驗請加 --force）`);
+    console.log(`  ⚠ 「${ch}」首位元組 0x${code[0].toString(16)} < 0xA1，--force 照加，結果請進遊戲確認`);
+  }
   if (existing.includes(ch) || add.some(a => a.ch === ch)) { skip.push(ch); continue; }
   add.push({ ch, code });
 }

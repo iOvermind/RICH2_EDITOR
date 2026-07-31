@@ -430,8 +430,9 @@ console.log('\n=== 5c-2. 遊戲字表（Wor.pak，全遊戲共用）===');
             const o = FONT_HEADER + (table.length + i) * GLYPH;
             return liveFont!.subarray(o, o + GLYPH).some(v => v !== 0);
           }));
-        check('新加的字 Big5 首位元組都 ≥ 0xA1（否則遊戲會排版錯位）',
-          added.every(c => iconv.encode(c, 'big5')[0] >= 0xa1));
+        const lowLead = added.filter(c => iconv.encode(c, 'big5')[0] < 0xa1);
+        check('新加的字 Big5 首位元組都 ≥ 0xA1（否則遊戲會排版錯位）', lowLead.length === 0,
+          lowLead.length ? `「${lowLead.join('」「')}」首位元組 < 0xA1 —— 若這是 add-chars.mjs --force 的實驗，結束後請還原` : '');
         // 引擎很可能靠「字表配置尾端那段 0」判斷表到哪結束，配置是進位到 16 bytes 的段落
         const slack = (Math.ceil(live.length * 2 / 16) * 16) - live.length * 2;
         check(`字表沒有卡在段落邊界（餘裕 ${slack} bytes）`, slack !== 0, `${slack}`);
