@@ -889,12 +889,8 @@ console.log('\n=== 7. Run.exe patch 狀態 ===');
   // 遊戲自己會把音效卡/搖桿設定寫回 Run.exe（實測 0xbfe、0xc49e、0xc4a2 三個位元組
   // 在玩過之後就變了，而 patchExe 只 setUint16 那六個 offset）。那種差異只回報、不當失敗。
   const INIT_LO = 0x1249e, INIT_HI = 0x124ec;
-  // 「經過就觸發」那 9 個位元組是編輯器另一個刻意的 patch（見第 8 節），不算意外差異
-  const PASS_LO = 0x1c5f, PASS_HI = 0x1c67;
   const inInit = diff.filter(o => o >= INIT_LO && o <= INIT_HI);
-  const inPass = diff.filter(o => o >= PASS_LO && o <= PASS_HI);
-  const outside = diff.filter(o => (o < INIT_LO || o > INIT_HI) && (o < PASS_LO || o > PASS_HI));
-  if (inPass.length) console.log(`  ℹ 經過觸發判斷已被改過（0x1C5F 起 ${inPass.length} 個位元組），第 8 節會驗證它的合法性。`);
+  const outside = diff.filter(o => o < INIT_LO || o > INIT_HI);
   check('容量設定區段只動到 maxLocId / 特殊數（沒碰玩家數或旁邊的程式碼）',
     inInit.every(o => allowed.has(o)), `差異位置 ${inInit.map(o => '0x' + o.toString(16)).join(',')}`);
   if (outside.length > 0) {
@@ -905,49 +901,24 @@ console.log('\n=== 7. Run.exe patch 狀態 ===');
   }
 }
 
-// ==================== 8. 經過就觸發 ====================
-// 移動途中每經過一格，引擎會讀該地點的 SPECIAL 欄位，原版寫死「==1（銀行）才觸發」。
-// 那段判斷在 Run.exe 檔案 0x1C5F，9 個位元組。編輯器把它換成同樣 9 個位元組的區間判斷。
-console.log('\n=== 8. 經過就觸發（Run.exe 0x1C5F）===');
+// ==================== 8. 經過就觸發（已查明，刻意不改）====================
+// 移動途中每經過一格，引擎會在檔案 0x1C5F 判斷 `cmp word ptr es:[bx], 1`，
+// es:[bx] 是該地點的 SPECIAL 欄位。但那個 1 **不是「哪種特殊地點經過會觸發」的開關** ——
+// 條件成立後走到的 0x1A68 是銀行專屬的過路處理，不是通用分派器。
+// 放寬成區間實測過：其他種類會跑進銀行流程，整個遊戲配色跑掉、角色移動出界。
+// 所以編輯器不碰這 9 個位元組，這裡當回歸防線守住。
+console.log('\n=== 8. 經過就觸發（Run.exe 0x1C5F，編輯器不得改動）===');
 {
   const PASS_OFFSET = 0x1c5f;
   const ORIG = [0x26, 0x83, 0x3f, 0x01, 0x74, 0x03, 0xe9, 0x69, 0x00];
-  const PATCHED = [0x26, 0x8b, 0x07, 0x2c, 0x00, 0x3c, 0x00, 0x77, 0x69];
-  const LOW_AT = 4, SPAN_AT = 6;
-
-  eq('改寫前後長度相同（不能位移後面的程式碼）', PATCHED.length, ORIG.length);
-  eq('ja 的 rel8 剛好是 0x1AD1 - 0x1A68', PATCHED[8], 0x1ad1 - 0x1a68);
-  check('rel8 塞得進一個位元組', 0x1ad1 - 0x1a68 <= 127);
-
-  // 指令語意：sub al,LOW 之後 cmp al,SPAN；低於 LOW 會借位變成大數，一樣被 ja 濾掉
-  const fires = (kind: number, low: number, span: number) => ((kind - low) & 0xff) <= span;
-  const cases: [number, number, number[]][] = [
-    [1, 0, [1]],
-    [1, 2, [1, 2, 3]],
-    [0, 10, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
-    [8, 0, [8]],
-  ];
-  for (const [low, span, want] of cases) {
-    const got = [...Array(11).keys()].filter(k => fires(k, low, span));
-    eq(`LOW=${low} SPAN=${span} 觸發種類 ${want.join(',')}`, got, want);
-  }
-  eq('LOW=11 SPAN=0 一個都不觸發', [...Array(11).keys()].filter(k => fires(k, 11, 0)), []);
-
   const orig = readIfExists(R && `${R}/Run.exe`);
   const live = readIfExists(LIVE && `${LIVE}/Run.exe`);
   if (!orig) skip('原版 Run.exe 的判斷位元組', NO_ORIG);
   else eq('原版 Run.exe @0x1C5F 是 cmp word es:[bx],1 / je / jmp',
     [...orig.subarray(PASS_OFFSET, PASS_OFFSET + 9)], ORIG);
-
   if (!live) skip('現用 Run.exe 的判斷位元組', NO_LIVE);
-  else {
-    const cur = [...live.subarray(PASS_OFFSET, PASS_OFFSET + 9)];
-    const isOrig = cur.every((v, i) => v === ORIG[i]);
-    const isPatched = cur.every((v, i) => i === LOW_AT || i === SPAN_AT || v === PATCHED[i]);
-    check('現用 Run.exe 要嘛是原版、要嘛是合法的區間版（沒有被寫成別的東西）',
-      isOrig || isPatched, `目前 = ${cur.map(v => v.toString(16)).join(' ')}`);
-    if (isPatched && !isOrig) console.log(`  ℹ 目前設定：經過就觸發的種類 ${cur[LOW_AT]}~${cur[LOW_AT] + cur[SPAN_AT]}`);
-  }
+  else eq('編輯器沒有動過這 9 個位元組（動了會當機）',
+    [...live.subarray(PASS_OFFSET, PASS_OFFSET + 9)], ORIG);
 }
 
 console.log(`\n${'='.repeat(50)}\n通過 ${pass}　失敗 ${fail}` + (skipped ? `　略過 ${skipped}` : ''));
