@@ -141,6 +141,35 @@ input[type="number"]::-webkit-outer-spin-button {
   border-color: #e51400; /* 選取時的紅框 */
 }
 
+/* 特殊地點：整組 2x2 一顆按鈕，不讓使用者拼四個單塊 */
+.special-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  cursor: pointer;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.special-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.special-btn.selected {
+  border-color: #e51400;
+}
+
+.special-btn-cap {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--color-on-surface-variant, #a0a0a0);
+  white-space: nowrap;
+}
+
 /* =========================================
    十字導航區（尺寸鎖死，避免被通用輸入框樣式撐開）
    ========================================= */

@@ -248,6 +248,111 @@ export function unifySpecialBlock(grid: Uint16Array, dv: DataView, block: Specia
     }
 }
 
+export interface PlaceSpecialResult {
+    ok: boolean;
+    /** 'new'＝開了一個新的特殊地點；'kind'＝換既有那個的種類；'none'＝什麼都沒做。 */
+    mode: 'new' | 'kind' | 'none';
+    error?: string;
+    locId?: number;
+    /** 換種類時的原種類。 */
+    kindFrom?: number;
+    /** 新編號原本被別的地點佔著，把它整個搬去別的號碼。 */
+    displaced?: { from: number; to: number };
+    /** 新地點自動接到的方向。 */
+    wired?: { dir: string; tgt: number }[];
+}
+
+/** 這個地點編號有沒有被用（grid 上有格子，或記錄非空）。 */
+function locIdInUse(grid: Uint16Array, dv: DataView, id: number): boolean {
+    return isActive(dv, id) || buildCellMap(grid).has(id);
+}
+
+/**
+ * 貼一個特殊地點（整組 2x2）。純資料操作，UI 只負責把結果講給使用者聽。
+ *
+ * anchor 落在既有特殊地點上＝換種類（圖塊與 SPECIAL 欄位一起換，不讓兩邊分家）；
+ * 落在空地上＝新增一個，四格圖塊、編號、X/Y、SPECIAL、地段=0、方向都一次配好。
+ * UNKA/UNKB 只填非 0 佔位值，正式的路由由呼叫端的 `recomputeRouting(forceIds:[locId])` 算。
+ */
+export function placeSpecial(
+    grid: Uint16Array, layout: Uint16Array, dv: DataView, anchor: number, kind: number, boundary = 49,
+): PlaceSpecialResult {
+    if (kind < 0 || kind >= SPECIAL_KIND_COUNT) {
+        return { ok: false, mode: 'none', error: `特殊種類 ${kind} 不存在（只有 0~${SPECIAL_KIND_COUNT - 1}）` };
+    }
+    if (anchor < 0 || anchor >= GRID_COLS * GRID_ROWS) {
+        return { ok: false, mode: 'none', error: '沒有選到格子' };
+    }
+    const tiles = specialTilesOfKind(kind);
+    const sc = scanSpecials(grid, layout, dv, boundary);
+
+    // (A) 點在既有特殊地點上 → 換種類
+    const cur = sc.confirmed.find(b => b.cells.includes(anchor));
+    if (cur) {
+        if (cur.kind === kind) {
+            return { ok: false, mode: 'none', locId: cur.locId, error: `地點 ${cur.locId} 已經是這個種類了` };
+        }
+        cur.cells.forEach((ci, i) => { layout[ci] = tiles[i]; });
+        setF(dv, LOC_FIELDS.SPECIAL, cur.locId, kind);
+        return { ok: true, mode: 'kind', locId: cur.locId, kindFrom: cur.kind };
+    }
+
+    // (B) 空地上開一個新的，以 anchor 為左上角
+    const gx = anchor % GRID_COLS, gy = Math.floor(anchor / GRID_COLS);
+    if (gx > GRID_COLS - 2 || gy > GRID_ROWS - 2) {
+        return { ok: false, mode: 'none', error: '特殊地點要 2x2，這格已經貼到右緣或下緣了，請往左上挪一格' };
+    }
+    const cells = [anchor, anchor + 1, anchor + GRID_COLS, anchor + GRID_COLS + 1];
+    const inWay = [...new Set(cells.map(ci => grid[ci]).filter(v => v > 0))].sort((a, b) => a - b);
+    if (inWay.length > 0) {
+        return {
+            ok: false, mode: 'none',
+            error: `這 2x2 已經被地點 ${inWay.join('、')} 佔著；特殊地點要獨佔四格，請先把它們的編號清成 0，或換個位置`,
+        };
+    }
+
+    // 引擎用 [0x1098] 當界，1~N 全部會被當成特殊地點，所以新的一定要接在最後一個之後。
+    const newId = sc.count + 1;
+    if (newId > boundary) {
+        return { ok: false, mode: 'none', error: `特殊地點編號已經用到上限 ${boundary}，加不下去了` };
+    }
+
+    // 那個號碼若被一般道路佔著，得先把道路整個搬到後面的空號（道路也必須留在 ≤boundary，
+    // 超過就會被引擎當成土地）。搬家由 renameLocation 負責，指向它的方向指標會一起改。
+    let displaced: { from: number; to: number } | undefined;
+    if (locIdInUse(grid, dv, newId)) {
+        let free = -1;
+        for (let id = newId + 1; id <= boundary; id++) if (!locIdInUse(grid, dv, id)) { free = id; break; }
+        if (free < 0) {
+            return {
+                ok: false, mode: 'none',
+                error: `編號 ${newId} 被既有地點佔著，而 ${newId + 1}~${boundary} 也找不到空號可以搬過去`,
+            };
+        }
+        if (!renameLocation(grid, dv, newId, free)) {
+            return { ok: false, mode: 'none', error: `把既有的地點 ${newId} 搬到 ${free} 失敗` };
+        }
+        displaced = { from: newId, to: free };
+    }
+
+    cells.forEach((ci, i) => { grid[ci] = newId; layout[ci] = tiles[i]; });
+    setF(dv, LOC_FIELDS.X, newId, gx);
+    setF(dv, LOC_FIELDS.Y, newId, gy);
+    setF(dv, LOC_FIELDS.SPECIAL, newId, kind);
+    setF(dv, LOC_FIELDS.SEGMENT, newId, 0);   // 特殊地點沒有地段，也沒有價格
+    setF(dv, LOC_FIELDS.UNK9, newId, 0);
+    setF(dv, LOC_FIELDS.UNK3, newId, 0);
+    setF(dv, LOC_FIELDS.OWNER, newId, 0);
+    setF(dv, LOC_FIELDS.RESERVE, newId, 0);
+    setF(dv, LOC_FIELDS.HOUSE, newId, 0);
+    // UNKA/UNKB 先填非 0 佔位——0 會被當成監獄/醫院入口格，重算才不會誤判
+    setF(dv, LOC_FIELDS.UNKA, newId, 1);
+    setF(dv, LOC_FIELDS.UNKB, newId, 1);
+
+    const wired = wireDirectionsFromGrid(grid, dv, newId);
+    return { ok: true, mode: 'new', locId: newId, displaced, wired };
+}
+
 export interface IntegrityOptions {
     priceDv?: DataView | null;
     /** DSK 的圖塊層。給了才會做特殊地點的圖塊確認。 */

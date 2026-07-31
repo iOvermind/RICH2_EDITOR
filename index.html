@@ -111,6 +111,16 @@
             <span class="text-on-surface-variant uppercase tracking-wider">已選取</span>
             <span id="selectionLabel" class="font-bold text-on-surface-variant/50">尚未選取</span>
           </div>
+
+          <!-- 特殊地點：整組 2x2，不拆成單塊 -->
+          <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1">特殊地點（一次貼 2x2 四格）</div>
+          <div class="text-[10px] text-on-surface-variant/70 leading-relaxed mb-2">
+            以<b class="text-primary">目前點選的那一格為左上角</b>貼下去，編號、座標、方向、路由、特殊種類一次配好。<br>
+            點在既有的特殊地點上，就是<b class="text-primary">換它的種類</b>（圖塊與 SPECIAL 欄位一起換）。
+          </div>
+          <div id="specialPickerWrap" class="flex flex-wrap gap-2 mb-5"></div>
+
+          <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider mb-2">一般圖塊</div>
           <div id="tilePickerWrap" class="flex flex-wrap gap-1"></div>
         </div>
 

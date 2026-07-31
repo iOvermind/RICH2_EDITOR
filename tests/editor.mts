@@ -7,7 +7,7 @@ import { History } from '../src/core/history.ts';
 import {
   recomputeRouting, nextLandId, findMarkerBase, findRoutingEntries,
   analyzeIntegrity, renumberSegment, MAX_LOC_ID,
-  scanSpecials, specialKindOfTile, specialTilesOfKind,
+  scanSpecials, specialKindOfTile, specialTilesOfKind, placeSpecial,
 } from '../src/core/integrity.ts';
 import { LOC_FIELDS, LAND_TILES, MARKER_TILE } from '../src/config/constants.ts';
 
@@ -461,6 +461,86 @@ console.log('\n=== 6b. 特殊地點的圖塊確認條件 ===');
   const mism = scanSpecials(grid, layout, dv);
   eq('欄位改成賭場但圖塊還是卡片：抓得到', mism.kindMismatch, [{ id: 1, field: 8, tile: 3 }]);
   dv.setUint16(LOC_FIELDS.SPECIAL + 1 * 2, 3, true);
+  }
+}
+
+// ==================== 6c. 貼一個完整的特殊地點 ====================
+// 圖塊選擇器把 40~83 抽掉，改成一種類一顆按鈕，點一下就是完整的 2x2 四格。
+// 這裡驗背後那套：編號、X/Y、SPECIAL、地段、方向都一次配好，
+// 而且新編號一定接在既有特殊地點之後（引擎用 [0x1098] 當界，1~N 全被當特殊地點）。
+console.log('\n=== 6c. 貼特殊地點 placeSpecial ===');
+{
+  const m = loadMap(R, 'Save_7', 'Part1');
+  if (!m) skip('placeSpecial', NO_ORIG);
+  else {
+  const { grid, layout, dv } = m;
+  const C = 36;
+  const f = (field: number, id: number) => dv.getUint16(field + id * 2, true);
+  eq('動手前：原版台灣 23 個特殊地點', scanSpecials(grid, layout, dv).count, 23);
+
+  // 找一塊四格全空的 2x2
+  let anchor = -1;
+  for (let y = 0; y < C - 1 && anchor < 0; y++) for (let x = 0; x < C - 1; x++) {
+    const i = y * C + x;
+    if (!grid[i] && !grid[i + 1] && !grid[i + C] && !grid[i + C + 1]) { anchor = i; break; }
+  }
+  check('找得到空的 2x2 可以貼', anchor >= 0);
+
+  // 邊界與佔用先擋掉（這些都不該動到資料）
+  const edge = placeSpecial(grid, layout, dv, (C - 1) * C + (C - 1), 8);
+  check('貼在右下角會被擋下來', !edge.ok && /2x2/.test(edge.error ?? ''), edge.error);
+  // anchor 本身不在任何特殊地點裡，但它的 2x2 會壓到別的地點 → 要擋下來
+  const inBlock = new Set(scanSpecials(grid, layout, dv).confirmed.flatMap(b => b.cells));
+  let busyAnchor = -1;
+  for (let y = 0; y < C - 1 && busyAnchor < 0; y++) for (let x = 0; x < C - 1; x++) {
+    const i = y * C + x;
+    if (inBlock.has(i)) continue;
+    if (grid[i] || grid[i + 1] || grid[i + C] || grid[i + C + 1]) { busyAnchor = i; break; }
+  }
+  const busy = placeSpecial(grid, layout, dv, busyAnchor, 8);
+  check('2x2 會壓到別的地點 → 擋下來', !busy.ok && busy.mode === 'none' && /佔著/.test(busy.error ?? ''),
+    `anchor=${busyAnchor} mode=${busy.mode} err=${busy.error}`);
+
+  const r = placeSpecial(grid, layout, dv, anchor, 8);   // 8 = 賭場
+  eq('貼成功，而且是「新增」', [r.ok, r.mode], [true, 'new']);
+  eq('新編號接在既有特殊地點之後', r.locId, 24);
+  eq('編號 24 原本是一般道路，整個搬到 40', r.displaced, { from: 24, to: 40 });
+  eq('四格圖塊 = 賭場的 72~75',
+    [layout[anchor], layout[anchor + 1], layout[anchor + C], layout[anchor + C + 1]], [72, 73, 74, 75]);
+  eq('四格 grid 都是新編號', [grid[anchor], grid[anchor + 1], grid[anchor + C], grid[anchor + C + 1]], [24, 24, 24, 24]);
+  eq('X/Y 記在左上角', [f(LOC_FIELDS.X, 24), f(LOC_FIELDS.Y, 24)], [anchor % C, Math.floor(anchor / C)]);
+  eq('SPECIAL 欄位 = 8（賭場）', f(LOC_FIELDS.SPECIAL, 24), 8);
+  eq('地段 = 0（特殊地點沒有地段，也沒有價格）', f(LOC_FIELDS.SEGMENT, 24), 0);
+  check('UNKA/UNKB 都不是 0（0 會被誤認成監獄/醫院入口格）',
+    f(LOC_FIELDS.UNKA, 24) !== 0 && f(LOC_FIELDS.UNKB, 24) !== 0);
+
+  // 被擠走的道路：號碼換了，但東西還在，而且仍留在 ≤49（超過會被引擎當成土地）
+  let road40 = 0;
+  for (const v of grid) if (v === 40) road40++;
+  check('被搬走的道路還在 grid 上（換成編號 40）', road40 > 0, `${road40} 格`);
+  check('搬完後編號 40 仍在特殊/道路分區(≤49)', 40 <= 49);
+  eq('搬完後沒有任何格子還用著舊編號以外的殘留座標',
+    [f(LOC_FIELDS.X, 40), f(LOC_FIELDS.Y, 40)].length, 2);
+
+  const after = scanSpecials(grid, layout, dv);
+  eq('掃描結果變成 24 個特殊地點', after.count, 24);
+  eq('新的那個確認得了', after.confirmed.filter(b => b.locId === 24 && b.kind === 8).length, 1);
+  eq('沒製造出圖塊/編號不一致',
+    [after.unconfirmed.length, after.kindMismatch.length, after.strayCells.length, after.cellsOnly.length],
+    [0, 0, 0, 0]);
+  const issues = analyzeIntegrity(grid, dv, 49, { layout });
+  const spIssues = issues.filter(i => i.kind.startsWith('special-'));
+  check('完整性檢查沒有新的特殊地點類警告', spIssues.length === 0, spIssues.map(i => i.detail).join(' / '));
+
+  // 點在既有特殊地點上 = 換種類（圖塊與 SPECIAL 欄位一起換）
+  const k = placeSpecial(grid, layout, dv, anchor + C + 1, 1);   // 1 = 銀行，點右下那格
+  eq('點在既有特殊地點上 → 換種類', [k.ok, k.mode, k.locId, k.kindFrom], [true, 'kind', 24, 8]);
+  eq('圖塊換成銀行的 44~47',
+    [layout[anchor], layout[anchor + 1], layout[anchor + C], layout[anchor + C + 1]], [44, 45, 46, 47]);
+  eq('SPECIAL 欄位跟著換成 1', f(LOC_FIELDS.SPECIAL, 24), 1);
+  eq('換種類不會多配一個編號', scanSpecials(grid, layout, dv).count, 24);
+  const same = placeSpecial(grid, layout, dv, anchor, 1);
+  check('種類沒變就什麼都不做', !same.ok && same.mode === 'none', `${same.mode}`);
   }
 }
 

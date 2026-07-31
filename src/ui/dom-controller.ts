@@ -12,7 +12,7 @@ import { Workspace } from '../core/workspace';
 import {
   analyzeIntegrity, repairMap, findFreeLandId, nextLandId, findMarkerBase,
   wireDirectionsFromGrid, recomputeRouting, renumberSegment, type RoutingReport,
-  scanSpecials, specialTilesOfKind, type IntegrityOptions,
+  scanSpecials, specialTilesOfKind, placeSpecial, type IntegrityOptions,
 } from '../core/integrity';
 import {
   MAPS, TEXT_SOURCE_FILES, isSupported as fsSupported, hasFolder, pickGameFolder,
@@ -659,7 +659,11 @@ function openEditPanel(gridX: number, gridY: number): void {
   if (workspace.mapTilesData.length > 0) {
     // 初始化選擇器，並把「替換圖塊」的邏輯當作 Callback 傳進去
     // 點圖塊 = 把它套用到「目前選取的所有格子」（拖曳選了幾格就套幾格）
-    initTilePicker(workspace.mapTilesData, palette, TILE_W, TILE_H, applyTileToSelection);
+    initTilePicker(workspace.mapTilesData, palette, TILE_W, TILE_H, {
+      onTile: applyTileToSelection,
+      onSpecial: applySpecialToSelection,
+      specialName: (k: number) => getSpecialName(k) || `種類${k}`,
+    });
 
     // 自動更新 UI 紅框與捲動位置
     updateTilePickerSelection(tileId);
@@ -1104,6 +1108,95 @@ function applyTileToSelection(tile: number): void {
   if (selectedGridX >= 0) openEditPanel(selectedGridX, selectedGridY);
   drawSelection();
   runValidation();
+}
+
+// ============================================================================
+// 特殊地點：整組 2x2 一次貼
+// ----------------------------------------------------------------------------
+// 特殊地點的四塊圖塊是連號的（左上 = 40 + 種類*4），拆開來讓人一塊一塊貼，
+// 只會貼出半個賭場、或左上角是卡片右下角是法院這種認不出來的東西。
+// 所以圖塊選擇器把 40~83 抽走，改成一個種類一顆按鈕，點下去就是完整的四格 ——
+// 而且順手把地點記錄整套建好：編號、X/Y、SPECIAL、方向、路由、exe 的特殊數。
+// ============================================================================
+
+/** 要把 2x2 貼在哪：拖曳剛好圈出一塊 2x2 就用它，否則以點選的那格當左上角。 */
+function specialAnchor(): number {
+  if (selection.size === 4) {
+    const cs = [...selection].sort((a, b) => a - b);
+    const x = cs[0] % GRID_COLS;
+    if (x < GRID_COLS - 1 && cs[1] === cs[0] + 1 && cs[2] === cs[0] + GRID_COLS && cs[3] === cs[0] + GRID_COLS + 1) {
+      return cs[0];
+    }
+  }
+  return selectedGridY * GRID_COLS + selectedGridX;
+}
+
+/** 貼完特殊地點的收尾：重畫、（新增時）同步 exe 特殊數欄位、重跑驗證。 */
+function afterSpecialEdit(added: boolean): void {
+  if (added) {
+    const n = autoSpecialCount();
+    const inp = document.getElementById('specialCountInput') as HTMLInputElement | null;
+    if (inp && inp.value !== n.toString()) {
+      inp.value = n.toString();
+      logMsg(`　特殊地點數欄位更新成 ${n}，按「儲存到遊戲」會寫進 Run.exe 的 [0x1098]。`);
+    }
+  }
+  redrawWithSelection();
+  if (selectedGridX >= 0) openEditPanel(selectedGridX, selectedGridY);
+  drawSelection();
+  runValidation();
+}
+
+/**
+ * 貼一個特殊地點（整組 2x2）。
+ * 點在既有特殊地點上＝換種類；點在空地上＝新增一個，並把整套記錄建好。
+ */
+function applySpecialToSelection(kind: number): void {
+  if (!workspace.isSaveLoaded || !locDataView) { logMsg('請先載入地圖再貼特殊地點。'); return; }
+  if (selectedGridX < 0) { logMsg('請先在地圖上點一格 —— 特殊地點會以那格為左上角貼下去。'); return; }
+
+  const name = getSpecialName(kind) || `種類${kind}`;
+  const tiles = specialTilesOfKind(kind);
+  const anchor = specialAnchor();
+  const boundary = getSpecialBoundary();
+
+  // 先在副本上試一次，確定做得成再 mark() —— 否則失敗也會在復原堆疊留下空白一筆
+  const dry = placeSpecial(
+    workspace.mapGrid.slice(), workspace.mapLayout.slice(),
+    new DataView(locDataView.buffer.slice(0) as ArrayBuffer, locDataView.byteOffset, locDataView.byteLength),
+    anchor, kind, boundary,
+  );
+  if (!dry.ok) { logMsg(`❌ ${dry.error}。`); return; }
+
+  mark(dry.mode === 'kind' ? `地點 ${dry.locId} 改成${name}` : `新增特殊地點（${name}）`);
+  const r = placeSpecial(workspace.mapGrid, workspace.mapLayout, locDataView, anchor, kind, boundary);
+  if (!r.ok) { logMsg(`❌ ${r.error}。`); doUndo(); return; }
+
+  if (r.mode === 'kind') {
+    const was = getSpecialName(r.kindFrom!) || `種類${r.kindFrom}`;
+    logMsg(`🏛 地點 ${r.locId}：${was} → ${name}（圖塊換成 ${tiles[0]}~${tiles[3]}，SPECIAL 欄位同步改成 ${kind}）。`);
+    afterSpecialEdit(false);
+    return;
+  }
+
+  const gx = anchor % GRID_COLS, gy = Math.floor(anchor / GRID_COLS);
+  if (r.displaced) {
+    logMsg(`　編號 ${r.displaced.from} 原本被別的地點用著，已整個搬成 ${r.displaced.to}` +
+      `（grid 格子、記錄、指向它的方向指標一起搬）。`);
+  }
+  logMsg(`🏛 (${gx},${gy}) 新增特殊地點 ${r.locId}「${name}」：圖塊 ${tiles[0]}~${tiles[3]}、佔 2x2 四格、` +
+    `座標 (${gx},${gy})、SPECIAL=${kind}、地段=0。`);
+  logMsg(`　自動接方向：${(r.wired ?? []).map(w => w.dir + '→' + w.tgt).join('、') || '（四周沒有路徑格，要自己接方向，否則玩家走不進來）'}`);
+
+  const rep = recomputeRouting(workspace.mapGrid, locDataView, { boundary, forceIds: [r.locId!] });
+  if (rep.ok) {
+    logMsg(`　路由已算出：UNKA(往監獄)=${getLocField(LOC_FIELDS.UNKA, r.locId!)}、UNKB(往醫院)=${getLocField(LOC_FIELDS.UNKB, r.locId!)}` +
+      (rep.a.stillBroken.length + rep.b.stillBroken.length > 0 ? '　⚠ 仍有格子路由不通，方向可能還沒接好' : ''));
+  } else {
+    logMsg(`　⚠ 路由沒算成：${rep.error}`);
+  }
+
+  afterSpecialEdit(true);
 }
 
 function rebuildDskBuffer(): ArrayBuffer | null {
