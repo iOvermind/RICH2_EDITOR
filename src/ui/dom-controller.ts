@@ -88,17 +88,24 @@ function getSegName(segId: number): string {
 // 這款遊戲自帶字型，**只收錄它自己用得到的字**。用了字表外的漢字，遊戲會顯示成
 // 別的字（實例：新增「苗栗縣」→ 遊戲顯示「邦邦縣」）。
 //
-// 字表本身找到了：**`Wor.pak` 裡有一組乾淨的 2-byte Big5 陣列**（原版 639 項、其中漢字 626），
-// 那就是遊戲能顯示的全部字。實測它跟三張地圖文字的**聯集完全相同，一個字都不差**，
-// 所以字表是**全遊戲共用一張**，不是每張地圖各帶一份 ——
-// 在香港打「澎」「湖」（台灣的地名）是正常的，它們就在表裡。
+// 字表找到了：**`Wor.pak` 裡有一組乾淨的 2-byte Big5 陣列**（原版 639 項、其中漢字 626），
+// 那是**檔案上**能查到的全部字，而且**有順序** —— 字形就是照這個順序排的。
 //
-// 字形是照這張表的順序排的，表外的字查不到 index 就掉到表尾：原版表尾（index 638）
-// 正好是「邦」，這就是「苗栗縣 → 邦邦縣」的來源 —— 兩個字都不在表內，雙雙掉到同一格。
+// 這張表分成三段（實測原版）：
+//   index   0~547  共用區（三張圖都在用）
+//   index 548~596  台灣專屬（澎湖、基隆、宜蘭…、宏碁）
+//   index 597~638  香港專屬（銅鑼灣、尖沙咀…、恆、匯、怡、鴻、永邦）
+//
+// ⚠ **每張圖用到的 index 上界不同**（台灣 596、香港 638、大富翁城 548），使用者實測
+// 「台灣的錯字跟香港不一樣」，最合理的解釋就是**引擎只把該圖需要的那段載進記憶體**。
+// 於是缺字查不到 index 時會掉到「那張圖載到的最後一格」——
+// 預測：台灣→「碁」、香港→「邦」、大富翁城→「厲」。（尚待遊戲內實測確認。）
+//
+// 所以檢查分兩級：表內但超出這張圖範圍的字＝**很可能不行**，表外的字＝**確定不行**。
 const HAN = /[一-鿿]/;
-const gameCharset = new Set<string>();
-/** 字表最後一個字：查不到的字會掉到這裡，也就是亂碼實際長的樣子。 */
-let charsetFallback = '';
+const charTable: string[] = [];                       // 全表，有順序
+const gameCharset = new Set<string>();                // 表內漢字，查得快
+const mapMaxIndex = new Map<string, number>();        // PAK 檔名 → 那張圖用到的最大 index
 
 function hanChars(text: string): Set<string> {
   const s = new Set<string>();
@@ -106,23 +113,49 @@ function hanChars(text: string): Set<string> {
   return s;
 }
 
-/** 回傳名稱中「遊戲字表沒有」的字。字表還沒讀到就回傳空陣列（不亂報警）。 */
-function unsupportedChars(name: string): string[] {
+/** 這張圖預測的「缺字落點」＝它用到的最後一格。 */
+function charsetFallbackOf(pak: string): string {
+  const max = mapMaxIndex.get(pak);
+  return max != null ? charTable[max] ?? '' : '';
+}
+
+interface BadChar {
+  ch: string;
+  /** 'missing'＝整張表都沒有；'out-of-range'＝表裡有，但排在這張圖用到的範圍之外。 */
+  why: 'missing' | 'out-of-range';
+}
+
+/** 回傳名稱中這張圖畫不出來的字。字表還沒讀到就回傳空陣列（不亂報警）。 */
+function unsupportedChars(name: string): BadChar[] {
   if (gameCharset.size === 0) return [];
-  const bad: string[] = [];
+  const pak = MAPS[currentMapIndex]?.pak ?? '';
+  const max = mapMaxIndex.get(pak);
+  const bad: BadChar[] = [];
   for (const ch of name) {
-    if (!HAN.test(ch) || gameCharset.has(ch) || bad.includes(ch)) continue;
-    bad.push(ch);
+    if (!HAN.test(ch) || bad.some(b => b.ch === ch)) continue;
+    if (!gameCharset.has(ch)) { bad.push({ ch, why: 'missing' }); continue; }
+    if (max != null && charTable.indexOf(ch) > max) bad.push({ ch, why: 'out-of-range' });
   }
   return bad;
 }
 
 /** 把缺字講成一句人看得懂的話。 */
-function unsupportedMsg(bad: string[]): string {
+function unsupportedMsg(bad: BadChar[]): string {
   if (bad.length === 0) return '';
-  return `　⚠ 「${bad.join('」「')}」不在遊戲字表裡` +
-    (charsetFallback ? `，會全部顯示成「${charsetFallback}」（字表的最後一個字）` : '，遊戲會顯示成別的字') +
-    '。字表是三張圖共用的，換張圖也一樣，建議換字。';
+  const here = MAPS[currentMapIndex]?.name ?? '這張圖';
+  const fb = charsetFallbackOf(MAPS[currentMapIndex]?.pak ?? '');
+  const miss = bad.filter(b => b.why === 'missing').map(b => b.ch);
+  const oor = bad.filter(b => b.why === 'out-of-range').map(b => b.ch);
+  let s = '';
+  if (miss.length) {
+    s += `　⚠ 「${miss.join('」「')}」不在遊戲字表裡，三張圖都畫不出來` +
+      (fb ? `（在【${here}】會顯示成「${fb}」）` : '') + '。';
+  }
+  if (oor.length) {
+    s += `　⚠ 「${oor.join('」「')}」在字表裡，但排在【${here}】用到的範圍之外 ——` +
+      `每張圖只載自己那一段，很可能一樣是亂碼，建議先進遊戲確認。`;
+  }
+  return s;
 }
 
 // ==== 地段名稱 ====
@@ -1664,6 +1697,27 @@ function parseCharTable(bytes: Uint8Array): string[] | null {
   return out;
 }
 
+/** 算出每張圖的文字用到字表的哪一段（上界＝那張圖預測的缺字落點）。 */
+async function buildMapRanges(): Promise<void> {
+  if (charTable.length === 0) return;
+  const pos = new Map(charTable.map((c, i) => [c, i]));
+  for (const m of MAPS) {
+    const buf = await tryReadFile(m.pak);
+    if (!buf) continue;
+    try {
+      const dvv = new DataView(buf);
+      const ptrs = parsePackPointers(dvv);
+      if (ptrs.length < 3) continue;
+      let max = -1;
+      for (const ch of hanChars(iconv.decode(Buffer.from(decompressGeneralData(dvv, ptrs[2])), 'big5'))) {
+        const i = pos.get(ch);
+        if (i != null && i > max) max = i;
+      }
+      if (max >= 0) mapMaxIndex.set(m.pak, max);
+    } catch { /* 這張圖讀不到就不設範圍，等於不做 out-of-range 檢查 */ }
+  }
+}
+
 async function buildGameCharset(): Promise<void> {
   if (gameCharset.size > 0) return;
 
@@ -1676,10 +1730,15 @@ async function buildGameCharset(): Promise<void> {
       for (const p of parsePackPointers(dvv)) {
         const tbl = parseCharTable(decompressGeneralData(dvv, p));
         if (!tbl) continue;
+        charTable.push(...tbl);
         for (const ch of tbl) if (HAN.test(ch)) gameCharset.add(ch);
-        charsetFallback = tbl[tbl.length - 1] ?? '';
-        logMsg(`已讀取遊戲字表（${CHAR_TABLE_FILE}）：${tbl.length} 項、漢字 ${gameCharset.size} 個。` +
-          `三張圖共用同一張表；表外的字會全部顯示成表尾的「${charsetFallback}」。`);
+        await buildMapRanges();
+        const ranges = MAPS.map(m => {
+          const i = mapMaxIndex.get(m.pak);
+          return i == null ? `${m.name} ?` : `${m.name} 0~${i}（缺字→「${charTable[i]}」）`;
+        }).join('、');
+        logMsg(`已讀取遊戲字表（${CHAR_TABLE_FILE}）：${tbl.length} 項、漢字 ${gameCharset.size} 個，字形照這個順序排。`);
+        logMsg(`　各圖用到的範圍：${ranges}　—— 超出自己範圍的字很可能一樣是亂碼。`);
         return;
       }
     } catch { /* 認不出來就往下走備援 */ }

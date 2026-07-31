@@ -343,7 +343,7 @@ console.log('\n=== 5c-2. 遊戲字表（Wor.pak，全遊戲共用）===');
     check('Wor.pak 裡認得出一張乾淨的 2-byte Big5 字表', table !== null);
     if (table) {
       eq('原版字表 639 項', table.length, 639);
-      eq('表尾是「邦」——查不到的字全都掉到這一格', table[table.length - 1], '邦');
+      eq('表尾是「邦」（香港的「永邦」）', table[table.length - 1], '邦');
       const tblHan = new Set(table.filter(c => /[一-鿿]/.test(c)));
       eq('表內漢字 626 個', tblHan.size, 626);
       if (sets.size === 3) {
@@ -351,8 +351,22 @@ console.log('\n=== 5c-2. 遊戲字表（Wor.pak，全遊戲共用）===');
         for (const s of sets.values()) for (const c of s) union.add(c);
         const onlyTable = [...tblHan].filter(c => !union.has(c));
         const onlyMaps = [...union].filter(c => !tblHan.has(c));
-        eq('字表 = 三張地圖文字的聯集（雙向零差異 → 字表是全遊戲共用，不是 per-map）',
-          [onlyTable.length, onlyMaps.length], [0, 0]);
+        eq('字表 = 三張地圖文字的聯集（雙向零差異）', [onlyTable.length, onlyMaps.length], [0, 0]);
+        // 字表是分區的：共用區 → 台灣專屬 → 香港專屬。各圖用到的 index 上界不同，
+        // 這就是「台灣的錯字跟香港不一樣」的來源（引擎只載自己那一段）。
+        const pos = new Map(table.map((c, i) => [c, i]));
+        const maxOf = (n: string) => Math.max(...[...sets.get(n)!].map(c => pos.get(c) ?? -1));
+        eq('各圖用到的最大 index：台灣 596、香港 638、大富翁城 548',
+          ['台灣', '香港', '大富翁城'].map(maxOf), [596, 638, 548]);
+        eq('各圖的預測缺字落點：碁 / 邦 / 厲',
+          ['台灣', '香港', '大富翁城'].map(n => table![maxOf(n)]), ['碁', '邦', '厲']);
+        // 尾段 597~638 是香港專屬（銅鑼灣、恆、匯、怡、鴻、永邦…），台灣與城完全沒用到。
+        // 548~596 主要是台灣的（澎湖、基隆、宏碁…），但香港也共用了 台基隆澳東嘉竹泰 幾個字，
+        // 所以只有香港那段是乾淨的專屬區——這也正好解釋為什麼香港的上界最高。
+        check('香港專屬區（597~638）台灣與大富翁城都完全沒用到',
+          table.slice(597).every(c => !sets.get('台灣')!.has(c) && !sets.get('大富翁城')!.has(c)));
+        check('三張圖的上界互不相同（→ 缺字落點也會不同）',
+          new Set(['台灣', '香港', '大富翁城'].map(maxOf)).size === 3);
       }
       eq('「苗」「栗」不在表內', ['苗', '栗'].map(c => table!.includes(c)), [false, false]);
       eq('「澎」「湖」在表內', ['澎', '湖'].map(c => table!.includes(c)), [true, true]);
