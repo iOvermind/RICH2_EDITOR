@@ -18,6 +18,7 @@ import {
 import {
   MAPS, CHAR_TABLE_FILE, isSupported as fsSupported, hasFolder, pickGameFolder,
   readFile as readGameFile, tryReadFile, writeFile as writeGameFile, patchExe, readSpecialCount, readCaps,
+  readPassThrough, writePassThrough,
 } from '../core/gamefolder';
 import { loadGlyphAtlas, atlasReady, canAddChar, addCharsToGameFont } from '../core/gamefont';
 import { History } from '../core/history';
@@ -840,6 +841,54 @@ interface AssignResult {
   error?: string;    // 沒配成的原因
   /** 圖塊沒換成（呼叫端要把 mapLayout 還原），例如編號用完 */
   revert?: boolean;
+}
+
+// ==== 「經過就觸發」的特殊地點種類 ====
+// 原版寫死只有銀行（種類 1）；引擎那段判斷只放得下一個連續區間（見 gamefolder.ts）。
+// 存檔時才寫進 Run.exe，跟其他 exe 設定一致。
+let passCurrent: { low: number; high: number } | null = null;
+
+function passSelects(): [HTMLSelectElement, HTMLSelectElement] | null {
+  const lo = document.getElementById('passLowSelect') as HTMLSelectElement | null;
+  const hi = document.getElementById('passHighSelect') as HTMLSelectElement | null;
+  return lo && hi ? [lo, hi] : null;
+}
+
+/** 把種類清單填進兩個下拉，並顯示目前設定。讀不到 exe 就停用。 */
+async function refreshPassThrough(): Promise<void> {
+  const sels = passSelects(); if (!sels) return;
+  const [lo, hi] = sels;
+  const hint = document.getElementById('passHint');
+  const opts = Array.from({ length: SPECIAL_KIND_COUNT }, (_, k) =>
+    `<option value="${k}">${k} ${getSpecialName(k) || '種類' + k}</option>`).join('');
+  // 「停用」＝空區間：low 設成比 high 大，引擎的 ja 一律成立
+  lo.innerHTML = opts;
+  hi.innerHTML = `<option value="-1">（都不觸發）</option>` + opts;
+
+  let cur: Awaited<ReturnType<typeof readPassThrough>> = null;
+  try { cur = await readPassThrough(); } catch { /* 沒資料夾就當讀不到 */ }
+  const ok = cur != null;
+  lo.disabled = hi.disabled = !ok;
+  if (!ok) {
+    passCurrent = null;
+    if (hint) hint.textContent = 'Run.exe 讀不到／認不出這段判斷';
+    return;
+  }
+  passCurrent = { low: cur!.low, high: cur!.high };
+  lo.value = String(cur!.low);
+  hi.value = String(cur!.high < cur!.low ? -1 : cur!.high);
+  if (hint) hint.textContent = cur!.patched ? '（已改過）' : '（原版：只有銀行）';
+}
+
+/** 讀兩個下拉目前選的區間；`high < low` 代表停用。 */
+function passFromUI(): { low: number; high: number } | null {
+  const sels = passSelects(); if (!sels) return null;
+  const [lo, hi] = sels;
+  if (lo.disabled) return null;
+  const low = parseInt(lo.value);
+  const rawHigh = parseInt(hi.value);
+  if (isNaN(low)) return null;
+  return { low, high: rawHigh < 0 ? low - 1 : Math.max(rawHigh, low) };
 }
 
 /** 還剩幾個可用的土地編號（51~282 之間全空的號碼）。 */
@@ -1936,6 +1985,7 @@ async function loadMapFromFolder(idx: number): Promise<void> {
     } catch { exeSpecialCount = null; /* 沒有 exe 也沒關係，只是不做比對 */ }
     // 海上道路：編號緊接在特殊地點之後，跟陸上道路不是同一種東西，載入時先報現況
     if (locDataView) logMsg(`🌊 ${seaRoadSummary()}`);
+    await refreshPassThrough();   // 種類名稱要等地圖載進來才有
     runValidation();   // exe 值進來了，重跑一次才會出現「特殊數對不上」的警告
   } catch (err) {
     logMsg(`載入【${m.name}】失敗：${(err as Error).message}`);
@@ -1992,6 +2042,21 @@ async function saveToGame(): Promise<void> {
         `（${MAPS.map((m, i) => `${m.name}=${maxLocByMap[i] ?? '不動'}`).join('、')}）。`);
     }
     if (r.specialChanged) logMsg(`　Run.exe：${MAPS[currentMapIndex].name} 特殊地點數 ${r.specialFrom} → ${r.specialTo}。`);
+
+    // 「經過就觸發」的種類區間（全遊戲共用一段程式碼，不分地圖）
+    const pass = passFromUI();
+    if (pass) {
+      try {
+        const changed = await writePassThrough(pass.low, pass.high, logMsg);
+        if (changed) {
+          const names = pass.high < pass.low
+            ? '（都不觸發）'
+            : Array.from({ length: pass.high - pass.low + 1 }, (_, i) => getSpecialName(pass.low + i) || `種類${pass.low + i}`).join('、');
+          logMsg(`　Run.exe：經過就觸發的地點改成 ${passCurrent ? `${passCurrent.low}~${passCurrent.high}` : '?'} → ${pass.low}~${pass.high}　${names}。`);
+          await refreshPassThrough();
+        }
+      } catch (err) { logMsg(`　⚠ 經過觸發設定沒寫入：${(err as Error).message}`); }
+    }
 
     // 直接回報 exe 現況，避免「更動 0 張圖」被誤讀成「沒有做 patch」
     const caps = await readCaps();
