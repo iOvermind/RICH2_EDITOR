@@ -119,3 +119,45 @@ ef44: test di,0xe0          ; 檢查狀態位元
 - [ ] 動態除錯（DOSBox-X 已在 `./DOSBox-X`）：設中斷點比較 pass 與 land 兩條路徑。
 - [ ] `Js3.exe`（中文系統，疑似含字型）**不是 EXEPACK**（無 'RB' 簽章），要另尋脫殼法。
 - [ ] 最終仍需在遊戲中實測驗證。
+
+---
+
+## 4. 解 LZEXE 壓縮的執行檔（可重複使用的做法）
+
+專案裡的 `lzexe91e/UNLZEXE5.ZIP` 有 UNLZEXE 0.5 的原始碼與 DOS 執行檔。
+那個 zip 是 PKZIP 1.x 的 **implode** 格式，PowerShell 的 `Expand-Archive` 解不開，要用 WinRAR：
+
+```powershell
+& "C:\Program Files\WinRAR\WinRAR.exe" x -ibck -y lzexe91e\UNLZEXE5.ZIP lzexe91e\unlzexe5\
+```
+
+然後用 DOSBox-X **完全非互動**地跑它：
+
+```powershell
+$w = "D:\lzwork"            # 放 UNLZEXE.EXE 跟要解的檔案
+$dbx = "D:\dev\rich2_editor\DOSBox-X"
+Start-Process -FilePath "$dbx\dosbox-x.exe" -WorkingDirectory $dbx -Wait `
+  -ArgumentList '-nomenu -c "MOUNT E D:\lzwork" -c "E:" -c "UNLZEXE JS3.EXE JS3U.EXE" -c "EXIT"'
+```
+
+⚠ 兩個踩過的坑：
+- **`-c` 的整串指令一定要用引號包成單一參數**。PowerShell 的 `-ArgumentList @("-c","MOUNT E ...")`
+  會被拆成好幾個參數，DOSBox 只收到 `-c MOUNT`，其餘當成垃圾參數 —— 結果是靜靜地什麼都不做。
+- **`DOSBox-X/dosbox-x.conf` 的 `[autoexec]` 已經把 `rich2` 掛成 C:**，所以要用別的磁碟機代號。
+
+## 5. ❌ 已排除：`Js3.exe` 不是中文系統
+
+先前猜「字型在 Js3.exe 這個精簡中文系統裡」。用上面的做法解開後（LZEXE 0.90，
+26833 → 67702 bytes），字串明白顯示它是**搖桿／滑鼠驅動程式**：
+
+```
+JOYMOUSE TEST OK / Transfer data to joystick control / _Analog Joystick / joymouse.js3
+```
+
+對應遊戲目錄的 `Joymouse.cfg`、`Rich.joy`、`Rich.js3`(78 bytes 設定檔)。
+`Rich2.bat` 的 `js3 rich` 只是載入搖桿設定，跟中文顯示無關。
+裡面也沒有 Wor.pak 那張 639 字表（搜 `aa fc a4 67 a5 4a` 無）。
+
+**所以字型還是沒找到**，而且嫌疑犯回到 `Run.exe`——它確實會讀 `WOR.PAK`。
+但 Run.exe 映像裡沒有 `cmp al,0A1h` 這類明顯的 Big5 首位元組判斷，
+下次要找的是非 `cmp` 形式的判斷（`test al,80h` / `or al,al` + `jns`、或 256 項查表）。

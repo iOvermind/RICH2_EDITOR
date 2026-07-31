@@ -27,3 +27,6 @@ original/
 rich2/
 # DOSBox-X（本機除錯用，勿提交）
 DOSBox-X/
+
+# 第三方工具（LZEXE/UNLZEXE），不進版控
+lzexe91e/
