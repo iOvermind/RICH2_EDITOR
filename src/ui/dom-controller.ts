@@ -96,12 +96,14 @@ function getSegName(segId: number): string {
 //   index 548~596  台灣專屬（澎湖、基隆、宜蘭…、宏碁）
 //   index 597~638  香港專屬（銅鑼灣、尖沙咀…、恆、匯、怡、鴻、永邦）
 //
-// ⚠ **每張圖用到的 index 上界不同**（台灣 596、香港 638、大富翁城 548），使用者實測
-// 「台灣的錯字跟香港不一樣」，最合理的解釋就是**引擎只把該圖需要的那段載進記憶體**。
-// 於是缺字查不到 index 時會掉到「那張圖載到的最後一格」——
-// 預測：台灣→「碁」、香港→「邦」、大富翁城→「厲」。（尚待遊戲內實測確認。）
+// ⚠ **每張圖用到的 index 上界不同**（台灣 596、香港 638、大富翁城 548）。
+// 使用者實測：缺字在**台灣**會變成看得懂的「邦」，在**香港**卻是**純亂碼**（不是字）。
+// 兩張圖的失敗模式不一樣，所以不是「查不到就一律掉到表尾」那麼單純；
+// 確切機制**還沒查清楚**，別在這裡寫死任何落點。
 //
-// 所以檢查分兩級：表內但超出這張圖範圍的字＝**很可能不行**，表外的字＝**確定不行**。
+// 能確定的只有：表外的字一定不行。表內但排在這張圖用到的範圍之外的字，
+// 依上界不同的現象判斷也很可能不行，但沒實測過 —— 所以檢查分兩級，
+// 第二級講成「很可能」而不是斷言。
 const HAN = /[一-鿿]/;
 const charTable: string[] = [];                       // 全表，有順序
 const gameCharset = new Set<string>();                // 表內漢字，查得快
@@ -111,12 +113,6 @@ function hanChars(text: string): Set<string> {
   const s = new Set<string>();
   for (const ch of text) if (HAN.test(ch)) s.add(ch);
   return s;
-}
-
-/** 這張圖預測的「缺字落點」＝它用到的最後一格。 */
-function charsetFallbackOf(pak: string): string {
-  const max = mapMaxIndex.get(pak);
-  return max != null ? charTable[max] ?? '' : '';
 }
 
 interface BadChar {
@@ -143,13 +139,13 @@ function unsupportedChars(name: string): BadChar[] {
 function unsupportedMsg(bad: BadChar[]): string {
   if (bad.length === 0) return '';
   const here = MAPS[currentMapIndex]?.name ?? '這張圖';
-  const fb = charsetFallbackOf(MAPS[currentMapIndex]?.pak ?? '');
   const miss = bad.filter(b => b.why === 'missing').map(b => b.ch);
   const oor = bad.filter(b => b.why === 'out-of-range').map(b => b.ch);
   let s = '';
   if (miss.length) {
-    s += `　⚠ 「${miss.join('」「')}」不在遊戲字表裡，三張圖都畫不出來` +
-      (fb ? `（在【${here}】會顯示成「${fb}」）` : '') + '。';
+    // 實測：台灣會變成看得懂的別字（苗栗縣→邦邦縣），香港是純亂碼。所以只講「畫不出來」，
+    // 不預測會變成什麼 —— 那要看哪張圖，而確切規則還沒查清楚。
+    s += `　⚠ 「${miss.join('」「')}」不在遊戲字表裡，畫不出來（台灣會變成別的字、香港是亂碼）。`;
   }
   if (oor.length) {
     s += `　⚠ 「${oor.join('」「')}」在字表裡，但排在【${here}】用到的範圍之外 ——` +
@@ -1735,10 +1731,10 @@ async function buildGameCharset(): Promise<void> {
         await buildMapRanges();
         const ranges = MAPS.map(m => {
           const i = mapMaxIndex.get(m.pak);
-          return i == null ? `${m.name} ?` : `${m.name} 0~${i}（缺字→「${charTable[i]}」）`;
+          return i == null ? `${m.name} ?` : `${m.name} 0~${i}`;
         }).join('、');
         logMsg(`已讀取遊戲字表（${CHAR_TABLE_FILE}）：${tbl.length} 項、漢字 ${gameCharset.size} 個，字形照這個順序排。`);
-        logMsg(`　各圖用到的範圍：${ranges}　—— 超出自己範圍的字很可能一樣是亂碼。`);
+        logMsg(`　各圖文字用到的範圍：${ranges}　—— 表外的字一定不行；超出自己範圍的字也很可能不行，建議實測。`);
         return;
       }
     } catch { /* 認不出來就往下走備援 */ }
