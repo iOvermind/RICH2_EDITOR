@@ -16,7 +16,7 @@ import {
   scanSeaRoads, repairSeaRoads, fmtRange,
 } from '../core/integrity';
 import {
-  MAPS, TEXT_SOURCE_FILES, isSupported as fsSupported, hasFolder, pickGameFolder,
+  MAPS, CHAR_TABLE_FILE, isSupported as fsSupported, hasFolder, pickGameFolder,
   readFile as readGameFile, tryReadFile, writeFile as writeGameFile, patchExe, readSpecialCount, readCaps,
 } from '../core/gamefolder';
 import { History } from '../core/history';
@@ -84,26 +84,45 @@ function getSegName(segId: number): string {
   return extraSegNames[segId] || `地段${segId}`;
 }
 
-// ==== 遊戲字型支援的字集 ====
-// 這款遊戲自帶字型，**只收錄它自己用得到的字**。用了字庫外的漢字，遊戲會顯示成
-// 別的字（實例：新增「苗栗縣」→ 遊戲顯示「邦邦縣」，因為「苗」「栗」不在字庫，
-// 而「縣」在，所以只有第三個字是對的）。
-// 字庫本身的位置還沒找到，但「原版文字裡出現過的字」必定在字庫內，拿來當白名單很安全。
+// ==== 遊戲字型的字表 ====
+// 這款遊戲自帶字型，**只收錄它自己用得到的字**。用了字表外的漢字，遊戲會顯示成
+// 別的字（實例：新增「苗栗縣」→ 遊戲顯示「邦邦縣」）。
+//
+// 字表本身找到了：**`Wor.pak` 裡有一組乾淨的 2-byte Big5 陣列**（原版 639 項、其中漢字 626），
+// 那就是遊戲能顯示的全部字。實測它跟三張地圖文字的**聯集完全相同，一個字都不差**，
+// 所以字表是**全遊戲共用一張**，不是每張地圖各帶一份 ——
+// 在香港打「澎」「湖」（台灣的地名）是正常的，它們就在表裡。
+//
+// 字形是照這張表的順序排的，表外的字查不到 index 就掉到表尾：原版表尾（index 638）
+// 正好是「邦」，這就是「苗栗縣 → 邦邦縣」的來源 —— 兩個字都不在表內，雙雙掉到同一格。
+const HAN = /[一-鿿]/;
 const gameCharset = new Set<string>();
+/** 字表最後一個字：查不到的字會掉到這裡，也就是亂碼實際長的樣子。 */
+let charsetFallback = '';
 
-function collectChars(text: string): void {
-  for (const ch of text) if (/[一-鿿]/.test(ch)) gameCharset.add(ch);
+function hanChars(text: string): Set<string> {
+  const s = new Set<string>();
+  for (const ch of text) if (HAN.test(ch)) s.add(ch);
+  return s;
 }
 
-/** 回傳名稱中「遊戲字型沒有」的字。字集還沒建立時回傳空陣列（不亂報警）。 */
+/** 回傳名稱中「遊戲字表沒有」的字。字表還沒讀到就回傳空陣列（不亂報警）。 */
 function unsupportedChars(name: string): string[] {
   if (gameCharset.size === 0) return [];
   const bad: string[] = [];
   for (const ch of name) {
-    if (!/[一-鿿]/.test(ch)) continue;
-    if (!gameCharset.has(ch) && !bad.includes(ch)) bad.push(ch);
+    if (!HAN.test(ch) || gameCharset.has(ch) || bad.includes(ch)) continue;
+    bad.push(ch);
   }
   return bad;
+}
+
+/** 把缺字講成一句人看得懂的話。 */
+function unsupportedMsg(bad: string[]): string {
+  if (bad.length === 0) return '';
+  return `　⚠ 「${bad.join('」「')}」不在遊戲字表裡` +
+    (charsetFallback ? `，會全部顯示成「${charsetFallback}」（字表的最後一個字）` : '，遊戲會顯示成別的字') +
+    '。字表是三張圖共用的，換張圖也一樣，建議換字。';
 }
 
 // ==== 地段名稱 ====
@@ -196,8 +215,7 @@ bindLiveField('segNameDisplay', '改地段名稱', (raw) => {
   const el = document.getElementById('segNameDisplay') as HTMLInputElement | null;
   if (el && el.value !== applied) el.value = applied;   // 顯示正規化後的結果
   const bad = unsupportedChars(applied);
-  logMsg(`地段 ${segId} 名稱改為「${applied}」（存檔時寫回 PAK）。` +
-    (bad.length ? `　⚠ 「${bad.join('」「')}」沒有出現在遊戲原本的文字裡，很可能顯示成別的字（實例：苗栗縣→邦邦縣），建議換字或先進遊戲確認。` : ''));
+  logMsg(`地段 ${segId} 名稱改為「${applied}」（存檔時寫回 PAK）。` + unsupportedMsg(bad));
   renderPriceTable(segId);
 });
 
@@ -1629,23 +1647,61 @@ async function computeMaxLocByMap(): Promise<(number | null)[]> {
   return out;
 }
 
+/**
+ * 「字表」＝一整段連續的 2-byte Big5 碼，沒有任何雜訊。用這個形狀去認，
+ * 就不必寫死是第幾組，換版本也不會抓錯（圖像資料一定過不了首位元組的檢查）。
+ */
+function parseCharTable(bytes: Uint8Array): string[] | null {
+  if (bytes.length < 400 || bytes.length % 2 !== 0) return null;
+  for (let i = 0; i < bytes.length; i += 2) {
+    const hi = bytes[i];
+    if (hi < 0x81 || hi > 0xfe) return null;      // 不是 Big5 首位元組 → 這組不是字表
+  }
+  const out: string[] = [];
+  for (let i = 0; i < bytes.length; i += 2) {
+    out.push(iconv.decode(Buffer.from(bytes.slice(i, i + 2)), 'big5'));
+  }
+  return out;
+}
+
 async function buildGameCharset(): Promise<void> {
   if (gameCharset.size > 0) return;
-  // ⚠ 只讀「真正的文字群組」（地圖 PAK 的第 3 組）。把圖像等二進位資料當 Big5 解會產生
-  // 大量假的漢字，字集被灌水就失去把關意義。
-  for (const fname of TEXT_SOURCE_FILES) {
-    const buf = await tryReadFile(fname);
+
+  // 1) 首選：Wor.pak 裡那張全遊戲共用的字表。這是權威來源 —— 它決定了遊戲畫得出哪些字，
+  //    順序也決定了字形的 index（表尾那個字就是所有查不到的字會變成的樣子）。
+  const wor = await tryReadFile(CHAR_TABLE_FILE);
+  if (wor) {
+    try {
+      const dvv = new DataView(wor);
+      for (const p of parsePackPointers(dvv)) {
+        const tbl = parseCharTable(decompressGeneralData(dvv, p));
+        if (!tbl) continue;
+        for (const ch of tbl) if (HAN.test(ch)) gameCharset.add(ch);
+        charsetFallback = tbl[tbl.length - 1] ?? '';
+        logMsg(`已讀取遊戲字表（${CHAR_TABLE_FILE}）：${tbl.length} 項、漢字 ${gameCharset.size} 個。` +
+          `三張圖共用同一張表；表外的字會全部顯示成表尾的「${charsetFallback}」。`);
+        return;
+      }
+    } catch { /* 認不出來就往下走備援 */ }
+  }
+
+  // 2) 備援：沒有 Wor.pak 時，退回「三張圖原版文字出現過的字」。實測這個聯集跟上面那張表
+  //    完全相同，所以是安全的替代品，只是拿不到表尾那個字。
+  //    ⚠ 只讀真正的文字群組（地圖 PAK 的第 3 組）。把圖像等二進位資料當 Big5 解會產生
+  //    大量假的漢字，字集被灌水就失去把關意義。
+  for (const m of MAPS) {
+    const buf = await tryReadFile(m.pak);
     if (!buf) continue;
     try {
       const dvv = new DataView(buf);
       const ptrs = parsePackPointers(dvv);
       if (ptrs.length < 3) continue;
       const bytes = decompressGeneralData(dvv, ptrs[2]);
-      if (bytes.length > 0) collectChars(iconv.decode(Buffer.from(bytes), 'big5'));
+      for (const ch of hanChars(iconv.decode(Buffer.from(bytes), 'big5'))) gameCharset.add(ch);
     } catch { /* 這個檔沒有文字群組，略過 */ }
   }
   if (gameCharset.size > 0) {
-    logMsg(`已讀取遊戲原本用到的 ${gameCharset.size} 個漢字。命名用到這之外的字，遊戲可能顯示成別的字。`);
+    logMsg(`找不到 ${CHAR_TABLE_FILE}，改用三張圖原版文字推出的字集：${gameCharset.size} 個漢字。`);
   }
 }
 

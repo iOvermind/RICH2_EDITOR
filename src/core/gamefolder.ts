@@ -93,7 +93,11 @@ export async function readSpecialCount(mapIndex: number): Promise<number> {
 }
 
 /** 遊戲資料夾裡所有含文字的檔案（用來蒐集字型支援的字集）。 */
-export const TEXT_SOURCE_FILES = ['Part1.pak', 'Part2.pak', 'Part3.pak', 'Data.pak'];
+/**
+ * 遊戲字表所在的檔案：`Wor.pak` 裡有一組乾淨的 2-byte Big5 陣列（原版 639 項），
+ * 那就是全遊戲畫得出來的所有字，三張地圖共用同一張。
+ */
+export const CHAR_TABLE_FILE = 'Wor.pak';
 
 /** 讀取資料夾內某檔；讀不到回 null（檔案不存在時不要讓整個流程掛掉）。 */
 export async function tryReadFile(name: string): Promise<ArrayBuffer | null> {

@@ -301,6 +301,65 @@ console.log('\n=== 5c. 地段名稱排版（改名要照原版格式）===');
   }
 }
 
+// ==================== 5c-2. 遊戲字表 ====================
+// 遊戲能顯示的字由 Wor.pak 裡一張「全遊戲共用」的 2-byte Big5 表決定（原版 639 項）。
+// 各張地圖自己的文字只用到其中一部分（台灣 545、香港 540、城 536），所以光看地圖文字
+// 會誤以為「字集是每張圖一份」——其實三張圖的聯集就等於那張表，一個字都不差。
+// 字形照表的順序排，表外的字查不到 index 會掉到表尾（原版表尾 = 「邦」），
+// 這就是「苗栗縣 → 邦邦縣」：苗、栗都不在表內，雙雙變成同一個字。
+console.log('\n=== 5c-2. 遊戲字表（Wor.pak，全遊戲共用）===');
+{
+  const han = (s: string) => { const r = new Set<string>(); for (const c of s) if (/[一-鿿]/.test(c)) r.add(c); return r; };
+  const parseTable = (b: Buffer): string[] | null => {
+    if (b.length < 400 || b.length % 2 !== 0) return null;
+    for (let i = 0; i < b.length; i += 2) if (b[i] < 0x81 || b[i] > 0xfe) return null;
+    const out: string[] = [];
+    for (let i = 0; i < b.length; i += 2) out.push(iconv.decode(b.slice(i, i + 2), 'big5'));
+    return out;
+  };
+  const wor = readIfExists(LIVE && `${LIVE}/Wor.pak`);
+  const sets = new Map<string, Set<string>>();
+  for (const [name, pak] of [['台灣', 'Part1'], ['香港', 'Part2'], ['大富翁城', 'Part3']] as const) {
+    const buf = readIfExists(R && `${R}/${pak}.pak`);
+    if (buf) sets.set(name, han(iconv.decode(decompress(buf, ptrs(buf)[2]), 'big5')));
+  }
+
+  if (sets.size < 3) skip('地圖文字字集', NO_ORIG);
+  else {
+    const union = new Set<string>();
+    for (const s of sets.values()) for (const c of s) union.add(c);
+    for (const [name, s] of sets) {
+      check(`原版${name}：地圖文字用到 ${s.size} 字，比全表 ${union.size} 少`, s.size < union.size, `${s.size}`);
+    }
+    eq('「苗」「栗」三張圖文字都沒有（苗栗縣→邦邦縣 的來源）',
+      ['苗', '栗'].map(c => union.has(c)), [false, false]);
+    eq('「澎」「湖」有（台灣地名，香港圖也畫得出來）', ['澎', '湖'].map(c => union.has(c)), [true, true]);
+  }
+
+  if (!wor) skip('Wor.pak 字表', '找不到遊戲目錄的 Wor.pak');
+  else {
+    let table: string[] | null = null;
+    for (const p of ptrs(wor)) { table = parseTable(decompress(wor, p)); if (table) break; }
+    check('Wor.pak 裡認得出一張乾淨的 2-byte Big5 字表', table !== null);
+    if (table) {
+      eq('原版字表 639 項', table.length, 639);
+      eq('表尾是「邦」——查不到的字全都掉到這一格', table[table.length - 1], '邦');
+      const tblHan = new Set(table.filter(c => /[一-鿿]/.test(c)));
+      eq('表內漢字 626 個', tblHan.size, 626);
+      if (sets.size === 3) {
+        const union = new Set<string>();
+        for (const s of sets.values()) for (const c of s) union.add(c);
+        const onlyTable = [...tblHan].filter(c => !union.has(c));
+        const onlyMaps = [...union].filter(c => !tblHan.has(c));
+        eq('字表 = 三張地圖文字的聯集（雙向零差異 → 字表是全遊戲共用，不是 per-map）',
+          [onlyTable.length, onlyMaps.length], [0, 0]);
+      }
+      eq('「苗」「栗」不在表內', ['苗', '栗'].map(c => table!.includes(c)), [false, false]);
+      eq('「澎」「湖」在表內', ['澎', '湖'].map(c => table!.includes(c)), [true, true]);
+    }
+  }
+}
+
 // ==================== 5d. 地段序號 (UNK9) ====================
 // 規則：同地段內依 locId 由小到大給 1,2,3…（三張原版圖 85 個地段零例外）
 console.log('\n=== 5d. 地段序號 renumberSegment ===');
@@ -682,8 +741,19 @@ console.log('\n=== 7. Run.exe patch 狀態 ===');
   for (let i = 0; i < Math.min(cur.length, bak.length); i++) if (cur[i] !== bak[i]) diff.push(i);
   const allowed = new Set([0x124aa, 0x124ab, 0x124c4, 0x124c5, 0x124de, 0x124df,
                            0x124b0, 0x124b1, 0x124ca, 0x124cb, 0x124e4, 0x124e5]);
-  check('與備份的差異只落在 maxLocId / 特殊數欄位（沒動到玩家數或其他程式碼）',
-    diff.every(o => allowed.has(o)), `差異位置 ${diff.map(o => '0x' + o.toString(16)).join(',')}`);
+  // 真正要守住的是「編輯器只改容量設定，沒有寫壞旁邊的程式碼」——所以只管
+  // 每張圖的初始化區段 0x1249e~0x124ec。這個範圍外的位元組**不是編輯器寫的**：
+  // 遊戲自己會把音效卡/搖桿設定寫回 Run.exe（實測 0xbfe、0xc49e、0xc4a2 三個位元組
+  // 在玩過之後就變了，而 patchExe 只 setUint16 那六個 offset）。那種差異只回報、不當失敗。
+  const INIT_LO = 0x1249e, INIT_HI = 0x124ec;
+  const inInit = diff.filter(o => o >= INIT_LO && o <= INIT_HI);
+  const outside = diff.filter(o => o < INIT_LO || o > INIT_HI);
+  check('容量設定區段只動到 maxLocId / 特殊數（沒碰玩家數或旁邊的程式碼）',
+    inInit.every(o => allowed.has(o)), `差異位置 ${inInit.map(o => '0x' + o.toString(16)).join(',')}`);
+  if (outside.length > 0) {
+    console.log(`  ℹ 區段外還有 ${outside.length} 個位元組與備份不同：${outside.map(o => '0x' + o.toString(16)).join(',')}` +
+      `　—— 編輯器不會寫那裡，多半是遊戲自己存回去的設定（音效卡/搖桿）。`);
+  }
   eq('檔案大小未變（EXEPACK 固定長度）', cur.length, bak.length);
   }
 }
