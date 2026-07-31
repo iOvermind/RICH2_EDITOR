@@ -85,29 +85,28 @@ function getSegName(segId: number): string {
 }
 
 // ==== 遊戲字型的字表 ====
-// 這款遊戲自帶字型，**只收錄它自己用得到的字**。用了字表外的漢字，遊戲會顯示成
-// 別的字（實例：新增「苗栗縣」→ 遊戲顯示「邦邦縣」）。
+// 這款遊戲自帶字型，**只畫得出字表裡的字**。字表在 `Wor.pak`：一組乾淨的 2-byte Big5
+// 陣列，原版 **639 項**（其中漢字 626），**有順序** —— 字形就是照這個順序排的。
 //
-// 字表找到了：**`Wor.pak` 裡有一組乾淨的 2-byte Big5 陣列**（原版 639 項、其中漢字 626），
-// 那是**檔案上**能查到的全部字，而且**有順序** —— 字形就是照這個順序排的。
+// 打錯字有兩種完全不同的壞法，實測都對上了：
 //
-// 這張表分成三段（實測原版）：
-//   index   0~547  共用區（三張圖都在用）
-//   index 548~596  台灣專屬（澎湖、基隆、宜蘭…、宏碁）
-//   index 597~638  香港專屬（銅鑼灣、尖沙咀…、恆、匯、怡、鴻、永邦）
+// 1. **Big5 首位元組 < 0xA1 → 位元組錯位，變成 ASCII 亂碼。**
+//    字表用到的首位元組只有 0xA1~0xF9，遊戲根本不把 0x81~0xA0（Big5 罕用字／造字區）
+//    當成雙位元組的開頭。實例：香港的「鰂魚湧」，「鰂」= `0x91 0x6F` → 0x91 被丟掉、
+//    0x6F 當成 ASCII 印出來就是「o」，後面整串跟著錯開 → 畫面上是「o邦邦」。
+//    **這種最糟**，它會把後面的排版一起弄歪。
 //
-// ⚠ **每張圖用到的 index 上界不同**（台灣 596、香港 638、大富翁城 548）。
-// 使用者實測：缺字在**台灣**會變成看得懂的「邦」，在**香港**卻是**純亂碼**（不是字）。
-// 兩張圖的失敗模式不一樣，所以不是「查不到就一律掉到表尾」那麼單純；
-// 確切機制**還沒查清楚**，別在這裡寫死任何落點。
+// 2. **是正常 Big5（0xA1~0xF9）但不在字表裡 → 顯示成字表的最後一個字。**
+//    原版 `table[638]` ＝「邦」。台灣「苗栗縣」→「邦邦縣」、香港「鰂魚湧」→「o邦邦」，
+//    兩張圖的落點都是「邦」。
 //
-// 能確定的只有：表外的字一定不行。表內但排在這張圖用到的範圍之外的字，
-// 依上界不同的現象判斷也很可能不行，但沒實測過 —— 所以檢查分兩級，
-// 第二級講成「很可能」而不是斷言。
+// 註：台灣也畫得出 index 638 的「邦」，而台灣自己的文字只用到 index 596 ——
+// 可見**整份字形三張圖都載得到**，沒有「每張圖只載自己那一段」這回事。
 const HAN = /[一-鿿]/;
 const charTable: string[] = [];                       // 全表，有順序
 const gameCharset = new Set<string>();                // 表內漢字，查得快
-const mapMaxIndex = new Map<string, number>();        // PAK 檔名 → 那張圖用到的最大 index
+/** 字表用到的 Big5 首位元組下界。低於這個的字會讓遊戲的雙位元組解析錯位。 */
+const BIG5_LEAD_MIN = 0xa1;
 
 function hanChars(text: string): Set<string> {
   const s = new Set<string>();
@@ -117,20 +116,25 @@ function hanChars(text: string): Set<string> {
 
 interface BadChar {
   ch: string;
-  /** 'missing'＝整張表都沒有；'out-of-range'＝表裡有，但排在這張圖用到的範圍之外。 */
-  why: 'missing' | 'out-of-range';
+  /** 'desync'＝首位元組太低會錯位（最糟）；'missing'＝正常 Big5 但字表裡沒有。 */
+  why: 'desync' | 'missing';
+  /** 錯位時實際會被印出來的那個 ASCII 字元。 */
+  asAscii?: string;
 }
 
-/** 回傳名稱中這張圖畫不出來的字。字表還沒讀到就回傳空陣列（不亂報警）。 */
+/** 回傳名稱中遊戲畫不出來的字。字表還沒讀到就回傳空陣列（不亂報警）。 */
 function unsupportedChars(name: string): BadChar[] {
   if (gameCharset.size === 0) return [];
-  const pak = MAPS[currentMapIndex]?.pak ?? '';
-  const max = mapMaxIndex.get(pak);
   const bad: BadChar[] = [];
   for (const ch of name) {
     if (!HAN.test(ch) || bad.some(b => b.ch === ch)) continue;
-    if (!gameCharset.has(ch)) { bad.push({ ch, why: 'missing' }); continue; }
-    if (max != null && charTable.indexOf(ch) > max) bad.push({ ch, why: 'out-of-range' });
+    const b5 = iconv.encode(ch, 'big5');
+    if (b5.length === 2 && b5[0] < BIG5_LEAD_MIN) {
+      const lo = b5[1];
+      bad.push({ ch, why: 'desync', asAscii: lo >= 0x20 && lo < 0x7f ? String.fromCharCode(lo) : undefined });
+      continue;
+    }
+    if (!gameCharset.has(ch)) bad.push({ ch, why: 'missing' });
   }
   return bad;
 }
@@ -138,18 +142,19 @@ function unsupportedChars(name: string): BadChar[] {
 /** 把缺字講成一句人看得懂的話。 */
 function unsupportedMsg(bad: BadChar[]): string {
   if (bad.length === 0) return '';
-  const here = MAPS[currentMapIndex]?.name ?? '這張圖';
+  const tail = charTable.length ? charTable[charTable.length - 1] : '';
+  const desync = bad.filter(b => b.why === 'desync');
   const miss = bad.filter(b => b.why === 'missing').map(b => b.ch);
-  const oor = bad.filter(b => b.why === 'out-of-range').map(b => b.ch);
   let s = '';
-  if (miss.length) {
-    // 實測：台灣會變成看得懂的別字（苗栗縣→邦邦縣），香港是純亂碼。所以只講「畫不出來」，
-    // 不預測會變成什麼 —— 那要看哪張圖，而確切規則還沒查清楚。
-    s += `　⚠ 「${miss.join('」「')}」不在遊戲字表裡，畫不出來（台灣會變成別的字、香港是亂碼）。`;
+  if (desync.length) {
+    const shown = desync.map(b => `「${b.ch}」` + (b.asAscii ? `→「${b.asAscii}」` : '')).join('、');
+    s += `　❌ ${shown}：這些是 Big5 罕用字（首位元組 < 0xA1），遊戲不認得雙位元組開頭，` +
+      `會把低位元組當成英數字印出來，後面整串排版跟著錯開。務必換字。`;
   }
-  if (oor.length) {
-    s += `　⚠ 「${oor.join('」「')}」在字表裡，但排在【${here}】用到的範圍之外 ——` +
-      `每張圖只載自己那一段，很可能一樣是亂碼，建議先進遊戲確認。`;
+  if (miss.length) {
+    s += `　⚠ 「${miss.join('」「')}」不在遊戲字表裡` +
+      (tail ? `，會顯示成字表最後一個字「${tail}」` : '，會顯示成別的字') +
+      `（三張圖都一樣）。`;
   }
   return s;
 }
@@ -1693,27 +1698,6 @@ function parseCharTable(bytes: Uint8Array): string[] | null {
   return out;
 }
 
-/** 算出每張圖的文字用到字表的哪一段（上界＝那張圖預測的缺字落點）。 */
-async function buildMapRanges(): Promise<void> {
-  if (charTable.length === 0) return;
-  const pos = new Map(charTable.map((c, i) => [c, i]));
-  for (const m of MAPS) {
-    const buf = await tryReadFile(m.pak);
-    if (!buf) continue;
-    try {
-      const dvv = new DataView(buf);
-      const ptrs = parsePackPointers(dvv);
-      if (ptrs.length < 3) continue;
-      let max = -1;
-      for (const ch of hanChars(iconv.decode(Buffer.from(decompressGeneralData(dvv, ptrs[2])), 'big5'))) {
-        const i = pos.get(ch);
-        if (i != null && i > max) max = i;
-      }
-      if (max >= 0) mapMaxIndex.set(m.pak, max);
-    } catch { /* 這張圖讀不到就不設範圍，等於不做 out-of-range 檢查 */ }
-  }
-}
-
 async function buildGameCharset(): Promise<void> {
   if (gameCharset.size > 0) return;
 
@@ -1728,13 +1712,8 @@ async function buildGameCharset(): Promise<void> {
         if (!tbl) continue;
         charTable.push(...tbl);
         for (const ch of tbl) if (HAN.test(ch)) gameCharset.add(ch);
-        await buildMapRanges();
-        const ranges = MAPS.map(m => {
-          const i = mapMaxIndex.get(m.pak);
-          return i == null ? `${m.name} ?` : `${m.name} 0~${i}`;
-        }).join('、');
-        logMsg(`已讀取遊戲字表（${CHAR_TABLE_FILE}）：${tbl.length} 項、漢字 ${gameCharset.size} 個，字形照這個順序排。`);
-        logMsg(`　各圖文字用到的範圍：${ranges}　—— 表外的字一定不行；超出自己範圍的字也很可能不行，建議實測。`);
+        logMsg(`已讀取遊戲字表（${CHAR_TABLE_FILE}）：${tbl.length} 項、漢字 ${gameCharset.size} 個，字形照這個順序排，三張圖共用同一份。`);
+        logMsg(`　表外的字會顯示成表尾的「${tbl[tbl.length - 1]}」；Big5 罕用字（首位元組 < 0xA1）更糟，會讓整串排版錯位。`);
         return;
       }
     } catch { /* 認不出來就往下走備援 */ }
