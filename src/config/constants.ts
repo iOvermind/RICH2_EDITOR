@@ -51,6 +51,18 @@ export const LAND_TILES: readonly number[] = [9, 10, 11, 12, 13, 14];
 export const MARKER_TILE: number = 1;
 export const MARKER_ID_OFFSET: number = 950;
 
+// 特殊地點的圖塊規則（三張原版圖 90 個特殊地點實測，零例外，且雙向都成立）：
+// 每個特殊地點佔 2x2 四格，四格的圖塊是**連號四塊**，左上角 = 40 + 種類*4，
+// 依「左上、右上、左下、右下」遞增 +0/+1/+2/+3，而且該地點的 SPECIAL 欄位 = 種類。
+//   0=公園(40~43) 1=銀行(44~47) 2=運氣(48~51) 3=卡片(52~55) 4=新聞(56~59) 5=股市(60~63)
+//   6=法院(64~67) 7=黑市(68~71) 8=賭場(72~75) 9=遊樂場(76~79) 10=稅捐處(80~83)
+// 反向也成立：畫面上湊出這組連號 2x2 的地方，就一定是一個特殊地點，四格同屬一個 locId。
+// 所以「佔 2x2 四格」只是必要條件，**圖塊才是能確認身分的那個**（見 integrity.ts 的 scanSpecials）。
+// 一般道路（含海上道路）一律是圖塊 84、只佔一格。
+export const SPECIAL_TILE_BASE: number = 40;
+export const SPECIAL_KIND_COUNT: number = 11;
+export const SPECIAL_TILE_SPAN: number = 4;
+
 // 價格表欄位定義
 export const PRICE_FIELD_COUNT: number = 10;
 export const PRICE_SEG_COUNT: number = 45;

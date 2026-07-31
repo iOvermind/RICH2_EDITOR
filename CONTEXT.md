@@ -31,3 +31,7 @@ _Avoid_: Property, Plot
 **Marker**:
 The purchase-flag cell sitting next to a Land, numbered `land + 950` and drawn with tile 1. It also encodes which side of the walkway the building sits on (UNK3).
 _Avoid_: OwnershipTile, Flag
+
+**Special**:
+A non-buyable functional cell — bank, card shop, park, and so on. Numbered 1 up to the engine's `[0x1098]`, and identified by its **tiles**, not by its SPECIAL field: a Special is a 2×2 block whose four tiles run consecutively from `40 + kind*4`. That block is what proves the four cells belong to one locId; the field only says what the engine does when you land there. A plain road, by contrast, is one cell of tile 84.
+_Avoid_: Facility, Building, SpecialTile

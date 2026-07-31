@@ -5,13 +5,14 @@ import { decompressGeneralData } from '../utils/compression';
 import {
   GRID_COLS, GRID_ROWS, TILE_W, TILE_H, palette,
   PRICE_FIELD_COUNT, PRICE_SEG_COUNT, PRICE_FIELD_SIZE, PRICE_FIELDS,
-  LOC_COUNT, LOC_FIELDS, LAND_TILES, MARKER_TILE, MARKER_ID_OFFSET
+  LOC_COUNT, LOC_FIELDS, LAND_TILES, MARKER_TILE, MARKER_ID_OFFSET, SPECIAL_KIND_COUNT
 } from '../config/constants';
 import { replaceGroupInDsk, rebuildDskBufferCore, parsePackPointers } from '../core/parser';
 import { Workspace } from '../core/workspace';
 import {
   analyzeIntegrity, repairMap, findFreeLandId, nextLandId, findMarkerBase,
   wireDirectionsFromGrid, recomputeRouting, renumberSegment, type RoutingReport,
+  scanSpecials, specialTilesOfKind, type IntegrityOptions,
 } from '../core/integrity';
 import {
   MAPS, TEXT_SOURCE_FILES, isSupported as fsSupported, hasFolder, pickGameFolder,
@@ -205,7 +206,25 @@ bindLiveField('editSpecial', '改特殊種類', (raw) => {
   const spId = parseInt(raw) || 0;
   (document.getElementById('specialNameDisplay') as HTMLSpanElement).textContent = (locId > 0 && locId <= 50) ? getSpecialName(spId) : '';
   if (locId > 0 && workspace.locData) setLocField(LOC_FIELDS.SPECIAL, locId, spId);
+  repaintSpecialTiles(locId, spId);
 });
+
+/**
+ * 換了特殊種類，圖塊要跟著換 —— 玩家看到的是圖塊，實際觸發的是 SPECIAL 欄位，
+ * 兩邊分家的話畫面上是賭場、踩下去卻進法院。只動「圖塊已確認是完整 2x2」的地點，
+ * 圖塊本來就沒排好的交給警告頁，不在這裡亂改畫面。
+ */
+function repaintSpecialTiles(locId: number, kind: number): void {
+  if (locId <= 0 || locId > getSpecialBoundary()) return;
+  if (kind < 0 || kind >= SPECIAL_KIND_COUNT) return;
+  const block = specials().confirmed.find(b => b.locId === locId);
+  if (!block || block.kind === kind) return;
+  const tiles = specialTilesOfKind(kind);
+  block.cells.forEach((ci, i) => { workspace.mapLayout[ci] = tiles[i]; });
+  renderer.redraw();
+  drawSelection();
+  logMsg(`　圖塊已跟著換成 ${tiles[0]}~${tiles[3]}（${getSpecialName(kind) || `種類${kind}`}）。`);
+}
 
 const extraSegNames: Record<number, string> = {};
 const extraPriceData: Record<number, Record<number, number>> = {};
@@ -474,7 +493,7 @@ function runValidation(): void {
 
   // === 結構完整性檢查（integrity.ts）：抓引擎會崩的真實損毀 ===
   if (locDataView) {
-    const issues = analyzeIntegrity(workspace.mapGrid, locDataView, getSpecialBoundary(), priceDataView);
+    const issues = analyzeIntegrity(workspace.mapGrid, locDataView, getSpecialBoundary(), integrityOpts());
     for (const iss of issues) {
       const cells: number[] = [];
       for (let i = 0; i < workspace.mapGrid.length; i++) if (workspace.mapGrid[i] === iss.locId) { cells.push(i); break; }
@@ -485,13 +504,14 @@ function runValidation(): void {
   // === exe 的特殊地點數 [0x1098] 與地圖現況對不上 ===
   // 這個值寫在 Run.exe 裡、不在地圖檔裡，改完地圖不會自己跟著變，所以在這裡提醒。
   if (exeSpecialCount != null) {
-    const n = autoSpecialCount();
+    const sc = specials();
+    const n = sc.count;
     if (n !== exeSpecialCount) {
       const scInp = document.getElementById('specialCountInput') as HTMLInputElement | null;
       const pending = scInp && scInp.value !== '' ? parseInt(scInp.value) : null;
       const detail = n > exeSpecialCount
-        ? `編號 ${exeSpecialCount + 1}~${n} 在遊戲裡不會被當成特殊地點`
-        : `編號 ${n + 1}~${exeSpecialCount} 會被引擎當成特殊地點，但地圖上不是 2x2，玩家踩上去可能當機`;
+        ? `編號 ${exeSpecialCount + 1}~${n}（${listSpecials(sc, exeSpecialCount + 1, n)}）在遊戲裡不會被當成特殊地點`
+        : `編號 ${n + 1}~${exeSpecialCount} 會被引擎當成特殊地點，但圖塊確認不了它們是特殊地點，玩家踩上去可能當機`;
       warnings.push({
         type: 'special-count', cells: [],
         msg: `【exe/特殊數】Run.exe 寫 ${exeSpecialCount}，地圖實際是 ${n} → ${detail}。` +
@@ -512,6 +532,23 @@ function runValidation(): void {
 const LAND_ID_BOUNDARY = 49;
 function getSpecialBoundary(): number {
   return LAND_ID_BOUNDARY;
+}
+
+/** 把 lo~hi 之間確認過的特殊地點列成「24=黑市」這種好讀的樣子。 */
+function listSpecials(sc: ReturnType<typeof specials>, lo: number, hi: number): string {
+  return sc.confirmed
+    .filter(b => b.locId >= lo && b.locId <= hi)
+    .map(b => `${b.locId}=${getSpecialName(b.kind) || `種類${b.kind}`}`)
+    .join('、') || '無';
+}
+
+/** 完整性檢查要用的可選輸入：價格表、圖塊層（特殊地點的確認條件）、種類名稱。 */
+function integrityOpts(): IntegrityOptions {
+  return {
+    priceDv: priceDataView,
+    layout: workspace.mapLayout,
+    specialName: (k: number) => getSpecialName(k) || `種類 ${k}`,
+  };
 }
 
 function renderWarnList(): void {
@@ -1165,7 +1202,7 @@ if (repairMapBtn) {
     flushAllEdits();
     if (!locDataView) { logMsg('請先載入 DSK 才能修復！'); return; }
     mark('修復地圖');
-    const { fixed, remaining } = repairMap(workspace.mapGrid, locDataView, getSpecialBoundary());
+    const { fixed, remaining } = repairMap(workspace.mapGrid, locDataView, getSpecialBoundary(), integrityOpts());
     logMsg(`🔧 修復完成：自動修正 ${fixed} 項；剩餘 ${remaining.length} 項需人工判斷（見警告頁）。`);
     renderer.redraw();
     runValidation();
@@ -1382,33 +1419,34 @@ function refreshAfterLoad(): void {
 }
 let currentMapIndex = 0;
 
-/** 編號 ≤49 的每個地點各佔幾個 grid 格。 */
-function lowIdCellCounts(): Map<number, number> {
-  const cnt = new Map<number, number>();
-  for (const v of workspace.mapGrid) if (v > 0 && v <= 49) cnt.set(v, (cnt.get(v) || 0) + 1);
-  return cnt;
+/** 目前這張圖的特殊地點掃描結果（圖塊 + 佔格數 + SPECIAL 欄位交叉確認）。 */
+function specials() {
+  return scanSpecials(workspace.mapGrid, workspace.mapLayout, locDataView, getSpecialBoundary());
 }
 
 /**
- * 推算「特殊地點數」[0x1098]。
- * 判準是**佔格數**：特殊地點一律佔 2x2 四格，一般道路（含海上道路）只佔一格。
- * 三張原版圖實測零例外——編號 ≤ 該值的全部佔 4 格、> 該值的全部佔 1 格。
+ * 推算「特殊地點數」[0x1098]＝確認過的特殊地點裡最大的編號。
  *
- * ⚠ 不能用「SPECIAL>0」判斷：公園的 SPECIAL 就是 0（台灣 6/13、香港 2/20、城 1 號），
+ * 確認條件有兩個，缺一不可：
+ *  1. **佔 2x2 四格**（一般道路含海上道路只佔一格）
+ *  2. **圖塊是連號四塊**，左上角 = 40 + 種類*4（例如卡片 = 52,53,54,55）
+ *
+ * 只用 (1) 的話，任何 2x2 的東西都會被當成特殊地點；加上 (2) 才真的認得出身分，
+ * 而且圖塊本身就證明了那四格屬於同一個 locId。三張原版圖 90 個特殊地點零例外。
+ *
+ * ⚠ 不能用「SPECIAL>0」判斷：公園的 SPECIAL 就是 0（台灣 6/13、香港 2/20、城 1/40 號），
  * 結尾若是公園會被漏掉。大富翁城的 40 號正是這種情況，舊寫法會算成 39，
  * 寫回 exe 就把 40 號踢出特殊區了。
  */
 function autoSpecialCount(): number {
-  let max = 0;
-  for (const [id, n] of lowIdCellCounts()) if (n >= 4 && id > max) max = id;
-  return max;
+  return specials().count;
 }
 
-/** 把特殊數設成 n 是否安全？回傳 1..n 之間「不是 2x2 特殊地點」的編號（設下去會讓引擎誤判、踩上去當機）。 */
+/** 把特殊數設成 n 是否安全？回傳 1..n 之間「確認不了是特殊地點」的編號（設下去會讓引擎誤判、踩上去當機）。 */
 function badSpecialIds(n: number): number[] {
-  const cnt = lowIdCellCounts();
+  const ok = new Set(specials().confirmed.map(b => b.locId));
   const bad: number[] = [];
-  for (let id = 1; id <= n; id++) if ((cnt.get(id) ?? 0) !== 4) bad.push(id);
+  for (let id = 1; id <= n; id++) if (!ok.has(id)) bad.push(id);
   return bad;
 }
 /**
@@ -1497,7 +1535,7 @@ async function saveToGame(): Promise<void> {
     // 這一步會改 mapLayout（依 OWNER/HOUSE 換購地標記圖塊），所以也要能復原
     if (typeof syncFn === 'function') { mark('儲存前同步購地標記'); syncFn(1, 2); }
     if (locDataView) {
-      const issues = analyzeIntegrity(workspace.mapGrid, locDataView, getSpecialBoundary(), priceDataView);
+      const issues = analyzeIntegrity(workspace.mapGrid, locDataView, getSpecialBoundary(), integrityOpts());
       if (issues.length) logMsg(`⚠ 偵測到 ${issues.length} 個結構問題（見警告頁），仍照你的意思寫回。`);
     }
     const dskBuf = rebuildDskBuffer();
@@ -1508,14 +1546,15 @@ async function saveToGame(): Promise<void> {
     const scInp = document.getElementById('specialCountInput') as HTMLInputElement | null;
     const sc = scInp && scInp.value !== '' ? (parseInt(scInp.value) || 0) : undefined;
 
-    // 寫回 exe 前先擋一次：1~sc 之間若混進非 2x2 的格子（海上道路那種），
+    // 寫回 exe 前先擋一次：1~sc 之間若混進確認不了的格子（海上道路那種），
     // 引擎會把它們當特殊地點處理，玩家踩上去會當機。
     if (sc != null && sc > 0) {
       const bad = badSpecialIds(sc);
       if (bad.length > 0) {
         const ok = confirm(
-          `特殊地點數要寫入 ${sc}，但編號 ${bad.join('、')} 不是 2x2 的特殊地點\n` +
-          `（特殊地點佔 4 格，一般道路只佔 1 格）。\n\n` +
+          `特殊地點數要寫入 ${sc}，但編號 ${bad.join('、')} 確認不了是特殊地點\n` +
+          `（特殊地點要同時滿足：佔 2x2 四格 + 圖塊是連號四塊，例如卡片 = 52,53,54,55；\n` +
+          `　一般道路只佔 1 格、圖塊 84）。\n\n` +
           `引擎會把 1~${sc} 全部當成特殊地點，玩家踩到這些格子可能當機。\n\n` +
           `仍要寫入嗎？`
         );
@@ -1580,12 +1619,16 @@ const specialAutoBtn = document.getElementById('specialAutoBtn');
 if (specialAutoBtn) {
   specialAutoBtn.addEventListener('click', () => {
     if (!workspace.isSaveLoaded) { logMsg('尚未載入地圖。'); return; }
-    const n = autoSpecialCount();
+    const sc = specials();
+    const n = sc.count;
     const inp = document.getElementById('specialCountInput') as HTMLInputElement | null;
     if (inp) inp.value = n.toString();
     const bad = badSpecialIds(n);
-    logMsg(`自動推算特殊地點數 = ${n}（佔 2x2 四格的最大編號；一般道路只佔一格）。存檔時會寫入 [0x1098]。` +
-      (bad.length ? `　⚠ 但編號 ${bad.join('、')} 不是 2x2，請先確認。` : ''));
+    logMsg(`自動推算特殊地點數 = ${n}：確認到 ${sc.confirmed.length} 個特殊地點` +
+      `（同時滿足「佔 2x2 四格」與「圖塊是連號四塊」，例如卡片 = 52,53,54,55）。存檔時會寫入 [0x1098]。`);
+    logMsg(`　${listSpecials(sc, 1, n)}`);
+    if (bad.length) logMsg(`　⚠ 編號 ${bad.join('、')} 確認不了是特殊地點，請先看警告頁。`);
+    if (sc.unconfirmed.length) logMsg(`　⚠ 有 ${sc.unconfirmed.length} 處圖塊排成完整 2x2 但四格編號沒統一，見警告頁（「修復地圖」可修其中能判斷的）。`);
     runValidation();   // 欄位填好了，警告要跟著改口（改成「存檔即生效」）
   });
 }

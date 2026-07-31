@@ -7,6 +7,7 @@ import { History } from '../src/core/history.ts';
 import {
   recomputeRouting, nextLandId, findMarkerBase, findRoutingEntries,
   analyzeIntegrity, renumberSegment, MAX_LOC_ID,
+  scanSpecials, specialKindOfTile, specialTilesOfKind,
 } from '../src/core/integrity.ts';
 import { LOC_FIELDS, LAND_TILES, MARKER_TILE } from '../src/config/constants.ts';
 
@@ -233,8 +234,9 @@ for (const [name, d, p] of [['台灣', 'Save_7', 'Part1'], ['香港', 'Save_8', 
   }
   check(`原版${name}：圖塊9~14 全是有地段的土地`, landTileBad === 0, `例外 ${landTileBad}`);
   check(`原版${name}：圖塊1 全是 +950 標記`, markerTileBad === 0, `例外 ${markerTileBad}`);
-  const issues = analyzeIntegrity(grid, dv, 49);
-  check(`原版${name}：完整性檢查 0 誤報`, issues.length === 0, `噴出 ${issues.length} 個：${issues.slice(0, 3).map(x => x.kind).join(',')}`);
+  const issues = analyzeIntegrity(grid, dv, 49, { layout });
+  check(`原版${name}：完整性檢查 0 誤報`, issues.length === 0,
+    `噴出 ${issues.length} 個：${issues.slice(0, 3).map(x => `${x.kind}(${x.detail})`).join(' / ')}`);
 }
 
 // ==================== 5b. forceIds：新格子一律重算 ====================
@@ -343,8 +345,8 @@ console.log('\n=== 5d. 地段序號 renumberSegment ===');
 }
 
 // ==================== 6. 特殊地點數推算 ====================
-// 判準是「佔 2x2 四格」，不是「SPECIAL>0」——公園的 SPECIAL 就是 0，
-// 用 SPECIAL>0 會把結尾的公園漏掉（大富翁城的 40 號）。
+// 判準有兩個，缺一不可：「佔 2x2 四格」＋「圖塊是連號四塊（左上 = 40 + 種類*4）」。
+// 不是「SPECIAL>0」——公園的 SPECIAL 就是 0，用它會把結尾的公園漏掉（大富翁城的 40 號）。
 console.log('\n=== 6. 特殊地點數（[0x1098]）推算 ===');
 {
   // 原版圖要跟「原版 exe」比；活的地圖才跟「目前的 exe」比。
@@ -360,7 +362,7 @@ console.log('\n=== 6. 特殊地點數（[0x1098]）推算 ===');
     const live = (c as { live?: boolean }).live === true;
     const m = loadMap(live ? LIVE : R, c.dsk, c.pak);
     if (!m) { skip(`${c.name} 特殊地點數`, live ? NO_LIVE : NO_ORIG); continue; }
-    const { grid, dv } = m;
+    const { grid, layout, dv } = m;
     const cnt = new Map<number, number>();
     for (const v of grid) if (v > 0 && v <= 49) cnt.set(v, (cnt.get(v) || 0) + 1);
 
@@ -369,28 +371,96 @@ console.log('\n=== 6. 特殊地點數（[0x1098]）推算 ===');
     let bySpecialFlag = 0;
     for (const [id] of cnt) if (dv.getUint16(LOC_FIELDS.SPECIAL + id * 2, true) > 0 && id > bySpecialFlag) bySpecialFlag = id;
 
+    const sc = scanSpecials(grid, layout, dv);
     const exe = live ? exeLive : exeOrig;
     const want = exe ? exe.readUInt16LE(c.off) : null;
 
     // 原版圖：推算值必須等於 exe。使用者當前的地圖會領先 exe（改了地圖還沒存回），
     // 所以只驗結構規則，並把差異印出來當提醒。
     if (want === null) skip(`${c.name}：推算值 = exe 實際值`, `找不到 ${live ? 'LIVE' : '原版'} Run.exe`);
-    else if (!live) eq(`${c.name}：用佔格數推算 = exe 實際值`, byCells, want);
-    else if (byCells !== want) {
-      console.log(`  ℹ ${c.name}（當前地圖）：地圖有 ${byCells} 個特殊地點，但 exe 寫 ${want}` +
-        ` → 編號 ${want + 1}~${byCells} 在遊戲裡不會被當成特殊地點。按「自動」再存檔即可。`);
+    else if (!live) eq(`${c.name}：圖塊+佔格數推算 = exe 實際值`, sc.count, want);
+    else if (sc.count !== want) {
+      console.log(`  ℹ ${c.name}（當前地圖）：地圖有 ${sc.count} 個特殊地點，但 exe 寫 ${want}` +
+        ` → 編號 ${want + 1}~${sc.count} 在遊戲裡不會被當成特殊地點。按「修復特殊」再存檔即可。`);
     }
+
+    // 兩個判準必須給出同一個答案 —— 圖塊是新加的確認條件，不該改變原本正確的結果
+    eq(`${c.name}：圖塊判準與佔格數判準一致`, sc.count, byCells);
 
     // 結構規則：1..N 全是 4 格、>N 全不是（N 用地圖自己推算出來的值）
     const inside: number[] = [], outside: number[] = [];
     for (const [id, n] of cnt) { if (id <= byCells && n !== 4) inside.push(id); if (id > byCells && n === 4) outside.push(id); }
     check(`${c.name}：1~${byCells} 全部佔 4 格、之後沒有佔 4 格的`, inside.length === 0 && outside.length === 0,
       `inside=${inside} outside=${outside}`);
+
+    // 圖塊規則：每個特殊地點的四格圖塊 = 連號四塊，左上 = 40 + SPECIAL*4，四格同屬一個 locId
+    eq(`${c.name}：確認到 ${sc.count} 個特殊地點，編號連續 1~${sc.count}`,
+      sc.confirmed.map(b => b.locId), Array.from({ length: sc.count }, (_, i) => i + 1));
+    check(`${c.name}：沒有「圖塊排成 2x2 但四格編號不統一」的地方`, sc.unconfirmed.length === 0,
+      sc.unconfirmed.map(u => `(${u.block.x},${u.block.y}) ${u.why}`).join(' / '));
+    check(`${c.name}：SPECIAL 欄位全部等於圖塊算出的種類`, sc.kindMismatch.length === 0,
+      sc.kindMismatch.map(k => `id=${k.id} 圖塊${k.tile} 欄位${k.field}`).join(' / '));
+    check(`${c.name}：沒有排不成 2x2 的零星特殊圖塊`, sc.strayCells.length === 0, `${sc.strayCells.length} 格`);
+    check(`${c.name}：沒有「佔 4 格但圖塊不是特殊圖塊」的編號`, sc.cellsOnly.length === 0, `${sc.cellsOnly}`);
+
     if (c.name === '大富翁城') {
       if (want === null) skip('大富翁城：舊的 SPECIAL>0 寫法會算錯（回歸測試）', '找不到原版 Run.exe');
       else check('大富翁城：舊的 SPECIAL>0 寫法會算錯（回歸測試）', bySpecialFlag !== want,
         `舊寫法 ${bySpecialFlag}、正確 ${want}`);
     }
+  }
+}
+
+// ==================== 6b. 圖塊確認條件本身 ====================
+// 「圖塊排成完整的 2x2 連號四塊」是特殊地點的身分證：它同時給出種類，
+// 也保證那四格屬於同一個 locId。這裡驗這個確認條件抓得到、也修得動。
+console.log('\n=== 6b. 特殊地點的圖塊確認條件 ===');
+{
+  const m = loadMap(R, 'Save_7', 'Part1');
+  if (!m) skip('圖塊確認條件', NO_ORIG);
+  else {
+  const { grid, layout, dv } = m;
+  eq('圖塊 52 是卡片(種類3)', specialKindOfTile(52), 3);
+  eq('圖塊 55 也算卡片(種類3)', specialKindOfTile(55), 3);
+  eq('卡片的四塊圖塊', specialTilesOfKind(3), [52, 53, 54, 55]);
+  eq('圖塊 84(一般道路) 不是特殊圖塊', specialKindOfTile(84), -1);
+  eq('圖塊 9(土地) 不是特殊圖塊', specialKindOfTile(9), -1);
+
+  const base = scanSpecials(grid, layout, dv);
+  const b1 = base.confirmed.find(b => b.locId === 1)!;
+  check('台灣地點1 是卡片，圖塊 52,53,54,55', b1 !== undefined && b1.kind === 3 &&
+    JSON.stringify(b1.cells.map(c => layout[c])) === '[52,53,54,55]',
+    `kind=${b1?.kind} tiles=${b1?.cells.map(c => layout[c])}`);
+
+  // 把地點1的其中一格搶去給別人 → 應該抓到，而且能自動統一回來
+  const stolen = b1.cells[3];
+  grid[stolen] = 0;
+  const broken = scanSpecials(grid, layout, dv);
+  check('四格被拆散：地點1 不再算確認過的特殊地點', !broken.confirmed.some(b => b.locId === 1));
+  check('四格被拆散：列進 unconfirmed 且知道要統一成 1',
+    broken.unconfirmed.length === 1 && broken.unconfirmed[0].fixId === 1,
+    `${JSON.stringify(broken.unconfirmed.map(u => [u.why, u.fixId]))}`);
+  const issues = analyzeIntegrity(grid, dv, 49, { layout });
+  const sb = issues.find(i => i.kind === 'special-block');
+  check('四格被拆散：完整性檢查給得出 fix()', sb !== undefined && typeof sb.fix === 'function');
+  sb!.fix!();
+  eq('修完後那一格回到地點 1', grid[stolen], 1);
+  eq('修完後掃描結果與原本一致', scanSpecials(grid, layout, dv).count, base.count);
+
+  // 圖塊缺一角 → 這個區塊不再成立，而且會報「零星特殊圖塊」
+  const saved = layout[b1.cells[3]];
+  layout[b1.cells[3]] = 84;
+  const chipped = scanSpecials(grid, layout, dv);
+  check('圖塊缺一角：地點1 不再算特殊地點', !chipped.confirmed.some(b => b.locId === 1));
+  check('圖塊缺一角：剩下三格被列為零星特殊圖塊', chipped.strayCells.length === 3, `${chipped.strayCells.length}`);
+  check('圖塊缺一角：地點1 落到「佔4格但圖塊不對」', chipped.cellsOnly.includes(1), `${chipped.cellsOnly}`);
+  layout[b1.cells[3]] = saved;
+
+  // SPECIAL 欄位與圖塊分家 → 抓得到
+  dv.setUint16(LOC_FIELDS.SPECIAL + 1 * 2, 8, true);
+  const mism = scanSpecials(grid, layout, dv);
+  eq('欄位改成賭場但圖塊還是卡片：抓得到', mism.kindMismatch, [{ id: 1, field: 8, tile: 3 }]);
+  dv.setUint16(LOC_FIELDS.SPECIAL + 1 * 2, 3, true);
   }
 }
 

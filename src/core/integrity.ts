@@ -1,7 +1,10 @@
 // src/core/integrity.ts
 // 地圖結構完整性：偵測 + 修復引擎要求的不變式。
 // 純函式，瀏覽器 (main.ts) 與 node 測試共用。
-import { GRID_COLS, GRID_ROWS, LOC_COUNT, LOC_FIELDS, PRICE_SEG_COUNT, MARKER_ID_OFFSET } from '../config/constants';
+import {
+    GRID_COLS, GRID_ROWS, LOC_COUNT, LOC_FIELDS, PRICE_SEG_COUNT, MARKER_ID_OFFSET,
+    SPECIAL_TILE_BASE, SPECIAL_KIND_COUNT, SPECIAL_TILE_SPAN,
+} from '../config/constants';
 
 // 地點編號絕對上限（LOC_COUNT=283 → 合法 index 0..282）。>950 是 +950 購地標記，不算路徑地點。
 export const MAX_LOC_ID = LOC_COUNT - 1;
@@ -37,7 +40,10 @@ export type IssueKind =
     | 'route-entry'      // UNKA/UNKB=0 的入口格不是剛好一個（0 是入口格專屬標記）
     | 'segment-order'    // 地段內序號(UNK9)不是依 locId 排的 1..N
     | 'dead-end'         // grid 上路徑地點的方向連結數 < 2（玩家會走不動）
-    | 'zero-price';      // 土地(seg>0)的地段買價 = 0（引擎可能除以 0）
+    | 'zero-price'       // 土地(seg>0)的地段買價 = 0（引擎可能除以 0）
+    | 'special-block'    // 圖塊排成完整的特殊地點 2x2，四格卻不同屬一個 locId
+    | 'special-kind'     // 地點的 SPECIAL 欄位與圖塊畫出來的種類不符
+    | 'special-tile';    // 特殊圖塊沒排成完整 2x2（半個特殊地點），或佔 4 格卻沒有特殊圖塊
 
 export interface IntegrityIssue {
     kind: IssueKind;
@@ -83,13 +89,182 @@ export function topLeft(cells: number[]): { x: number; y: number } {
     return { x, y };
 }
 
+// ============================================================================
+// 特殊地點：用圖塊確認身分
+// ----------------------------------------------------------------------------
+// 判準見 constants.ts 的 SPECIAL_TILE_BASE：一個特殊地點 = 2x2 四格 +「連號四塊」圖塊，
+// 左上角 = 40 + 種類*4。舊寫法只數「佔幾格」，那只是必要條件 —— 任何 2x2 的東西都會通過。
+// 圖塊對上了才真的認得出身分：它同時給出種類，而且反過來保證這四格屬於同一個 locId。
+// ============================================================================
+
+/** 這個圖塊屬於哪個特殊種類（0~10）？不是特殊圖塊回 -1。 */
+export function specialKindOfTile(tile: number): number {
+    if (tile < SPECIAL_TILE_BASE) return -1;
+    const kind = Math.floor((tile - SPECIAL_TILE_BASE) / SPECIAL_TILE_SPAN);
+    return kind < SPECIAL_KIND_COUNT ? kind : -1;
+}
+
+/** 某特殊種類該用的四塊圖塊，順序為左上、右上、左下、右下。 */
+export function specialTilesOfKind(kind: number): number[] {
+    const b = SPECIAL_TILE_BASE + kind * SPECIAL_TILE_SPAN;
+    return [b, b + 1, b + 2, b + 3];
+}
+
+export interface SpecialBlock {
+    kind: number;      // 圖塊算出來的特殊種類 0~10
+    x: number; y: number;   // 左上角 grid 座標
+    cells: number[];   // 四格 grid index：左上、右上、左下、右下
+    ids: number[];     // 這四格用到的 locId（去重、由小到大，含 0）
+    locId: number;     // 四格一致且非 0 時的編號，否則 -1
+}
+
+/** 圖塊排成完整 2x2 連號、但四格不同屬一個 locId 的區塊。 */
+export interface SpecialBlockIssue {
+    block: SpecialBlock;
+    why: string;
+    fixId: number;     // 該統一成哪個編號（-1 = 無法判斷，要人工決定）
+}
+
+/**
+ * 掃出所有「圖塊排成完整 2x2 連號」的特殊區塊。只認左上角起算的完整四格，
+ * 所以半個特殊地點（例如只貼了上面兩格）不會被誤認。
+ */
+export function findSpecialBlocks(grid: Uint16Array, layout: Uint16Array): SpecialBlock[] {
+    const out: SpecialBlock[] = [];
+    for (let y = 0; y < GRID_ROWS - 1; y++) {
+        for (let x = 0; x < GRID_COLS - 1; x++) {
+            const i = y * GRID_COLS + x;
+            const t = layout[i];
+            const kind = specialKindOfTile(t);
+            if (kind < 0 || (t - SPECIAL_TILE_BASE) % SPECIAL_TILE_SPAN !== 0) continue;   // 只從左上角起算
+            if (layout[i + 1] !== t + 1) continue;
+            if (layout[i + GRID_COLS] !== t + 2) continue;
+            if (layout[i + GRID_COLS + 1] !== t + 3) continue;
+            const cells = [i, i + 1, i + GRID_COLS, i + GRID_COLS + 1];
+            const ids = [...new Set(cells.map(c => grid[c]))].sort((a, b) => a - b);
+            out.push({ kind, x, y, cells, ids, locId: ids.length === 1 && ids[0] > 0 ? ids[0] : -1 });
+        }
+    }
+    return out;
+}
+
+export interface SpecialScan {
+    /** 推算的特殊地點數 [0x1098]＝確認過的最大編號。 */
+    count: number;
+    /** 圖塊、佔格數、編號三者都對得起來的特殊地點（依編號排序）。 */
+    confirmed: SpecialBlock[];
+    /** 圖塊是完整 2x2 連號，四格卻不同屬一個有效編號。 */
+    unconfirmed: SpecialBlockIssue[];
+    /** 編號沒問題，但 SPECIAL 欄位跟圖塊畫的種類不一樣。 */
+    kindMismatch: { id: number; field: number; tile: number }[];
+    /** 圖塊落在特殊區(40~83)、卻不屬於任何完整 2x2 的格子（半個特殊地點）。 */
+    strayCells: number[];
+    /** 佔了 2x2 四格、圖塊卻不是連號特殊圖塊的低編號（引擎不見得認得）。 */
+    cellsOnly: number[];
+}
+
+/**
+ * 全圖特殊地點掃描：以圖塊為身分依據，再用佔格數與 SPECIAL 欄位交叉驗證。
+ * dv 省略時只驗圖塊與格子，不查 SPECIAL 欄位。
+ */
+export function scanSpecials(
+    grid: Uint16Array, layout: Uint16Array, dv?: DataView | null, boundary = 49,
+): SpecialScan {
+    const blocks = findSpecialBlocks(grid, layout);
+    const cellMap = buildCellMap(grid);
+    const confirmed: SpecialBlock[] = [];
+    const unconfirmed: SpecialBlockIssue[] = [];
+    const kindMismatch: { id: number; field: number; tile: number }[] = [];
+
+    for (const b of blocks) {
+        if (b.locId < 0) {
+            // 四格不同號。若其中剛好只有一個有效的特殊編號，那就是它 —— 圖塊已經證明
+            // 這四格是同一個地點，其餘的 0 或雜號是編輯過程留下的。
+            const cands = b.ids.filter(v => v > 0 && v <= boundary);
+            unconfirmed.push({
+                block: b,
+                why: b.ids.every(v => v === 0) ? '四格都還沒有地點編號' : `四格分屬地點 ${b.ids.join('、')}`,
+                fixId: cands.length === 1 ? cands[0] : -1,
+            });
+            continue;
+        }
+        if (b.locId > boundary) {
+            unconfirmed.push({
+                block: b, fixId: -1,
+                why: `四格都是地點 ${b.locId}，但 ${b.locId} > ${boundary} 不在特殊分區`,
+            });
+            continue;
+        }
+        // 同一個編號若還有第五格散在別處，這個區塊就不算數（引擎的特殊地點剛好佔 4 格）
+        const cells = cellMap.get(b.locId);
+        if (!cells || cells.length !== 4) {
+            unconfirmed.push({
+                block: b, fixId: -1,
+                why: `地點 ${b.locId} 在 grid 上佔 ${cells ? cells.length : 0} 格，特殊地點必須剛好 4 格`,
+            });
+            continue;
+        }
+        confirmed.push(b);
+        if (dv) {
+            const field = getF(dv, LOC_FIELDS.SPECIAL, b.locId);
+            if (field !== b.kind) kindMismatch.push({ id: b.locId, field, tile: b.kind });
+        }
+    }
+    confirmed.sort((a, b) => a.locId - b.locId);
+
+    const inBlock = new Set<number>();
+    for (const b of blocks) for (const c of b.cells) inBlock.add(c);
+    const strayCells: number[] = [];
+    for (let i = 0; i < layout.length; i++) {
+        if (specialKindOfTile(layout[i]) >= 0 && !inBlock.has(i)) strayCells.push(i);
+    }
+
+    const ok = new Set(confirmed.map(b => b.locId));
+    const cellsOnly: number[] = [];
+    for (const [id, cells] of cellMap) {
+        if (id > 0 && id <= boundary && cells.length === 4 && !ok.has(id)) cellsOnly.push(id);
+    }
+    cellsOnly.sort((a, b) => a - b);
+
+    let count = 0;
+    for (const b of confirmed) if (b.locId > count) count = b.locId;
+    return { count, confirmed, unconfirmed, kindMismatch, strayCells, cellsOnly };
+}
+
+/**
+ * 把一個 2x2 特殊區塊的四格統一成同一個 locId，並把受影響的地點座標重新同步。
+ * 前提是圖塊已經確認過這四格是同一個特殊地點。
+ */
+export function unifySpecialBlock(grid: Uint16Array, dv: DataView, block: SpecialBlock, id: number): void {
+    const touched = new Set<number>([id]);
+    for (const c of block.cells) { if (grid[c] > 0) touched.add(grid[c]); grid[c] = id; }
+    const cm = buildCellMap(grid);
+    for (const t of touched) {
+        const cells = cm.get(t);
+        if (!cells || t > MAX_LOC_ID) continue;
+        const { x, y } = topLeft(cells);
+        setF(dv, LOC_FIELDS.X, t, x);
+        setF(dv, LOC_FIELDS.Y, t, y);
+    }
+}
+
+export interface IntegrityOptions {
+    priceDv?: DataView | null;
+    /** DSK 的圖塊層。給了才會做特殊地點的圖塊確認。 */
+    layout?: Uint16Array | null;
+    /** 種類編號 → 名稱（來自 PAK 文字，例如 3→「卡片」）。純粹讓訊息好讀。 */
+    specialName?: (kind: number) => string;
+}
+
 /**
  * 全圖完整性掃描。
  * boundary = 特殊/道路分界編號（= 引擎 [0x1098]，台灣23/香港27/城40）。
  * 只讀不改；每個可安全修復的 issue 會附帶 fix()。
  */
-export function analyzeIntegrity(grid: Uint16Array, dv: DataView, boundary: number, priceDv?: DataView | null): IntegrityIssue[] {
+export function analyzeIntegrity(grid: Uint16Array, dv: DataView, boundary: number, opts: IntegrityOptions = {}): IntegrityIssue[] {
     const issues: IntegrityIssue[] = [];
+    const priceDv = opts.priceDv;
+    const kindName = opts.specialName ?? ((k: number) => `種類 ${k}`);
     const cellMap = buildCellMap(grid);
     const onGrid = (id: number) => cellMap.has(id);
 
@@ -236,20 +411,62 @@ export function analyzeIntegrity(grid: Uint16Array, dv: DataView, boundary: numb
         }
     }
 
+    // 特殊地點：圖塊排成完整 2x2 連號，就代表這四格是同一個特殊地點。
+    // 以它為準去對編號、佔格數與 SPECIAL 欄位，比舊的「數格子」判準準得多。
+    if (opts.layout) {
+        const sc = scanSpecials(grid, opts.layout, dv, boundary);
+        for (const u of sc.unconfirmed) {
+            const b = u.block;
+            const tiles = specialTilesOfKind(b.kind);
+            const head = `(${b.x},${b.y}) 的圖塊 ${tiles[0]}~${tiles[3]} 是完整的 2x2「${kindName(b.kind)}」，四格應該同屬一個地點編號`;
+            issues.push({
+                kind: 'special-block',
+                locId: u.fixId > 0 ? u.fixId : 0,
+                detail: u.fixId > 0
+                    ? `${head}，但${u.why} → 可自動統一成 ${u.fixId}`
+                    : `${head}，但${u.why} → 請手動決定要用哪個編號`,
+                fix: u.fixId > 0 ? () => { unifySpecialBlock(grid, dv, b, u.fixId); } : undefined,
+            });
+        }
+        for (const k of sc.kindMismatch) {
+            issues.push({
+                kind: 'special-kind', locId: k.id,
+                detail: `地點 ${k.id} 的圖塊畫的是「${kindName(k.tile)}」(${k.tile})，SPECIAL 欄位卻是「${kindName(k.field)}」(${k.field})；` +
+                    `玩家看到的是圖塊、實際觸發的是欄位，兩邊要一致`,
+            });
+        }
+        if (sc.strayCells.length > 0) {
+            const at = sc.strayCells.slice(0, 8).map(i => `(${i % GRID_COLS},${Math.floor(i / GRID_COLS)})`).join('、');
+            issues.push({
+                kind: 'special-tile', locId: 0,
+                detail: `有 ${sc.strayCells.length} 格用了特殊地點的圖塊，卻沒排成完整的 2x2 連號四格：${at}` +
+                    (sc.strayCells.length > 8 ? ' …' : '') + '　（半個特殊地點，畫面會缺角）',
+            });
+        }
+        for (const id of sc.cellsOnly) {
+            issues.push({
+                kind: 'special-tile', locId: id,
+                detail: `地點 ${id} 佔了 2x2 四格，但圖塊不是任何一種特殊地點的連號四塊 → 確認不了它是哪種特殊地點`,
+            });
+        }
+    }
+
     return issues;
 }
 
 /** 套用所有可自動修復的 issue，回傳修好的數量。 */
-export function repairMap(grid: Uint16Array, dv: DataView, boundary: number): { fixed: number; remaining: IntegrityIssue[] } {
+export function repairMap(
+    grid: Uint16Array, dv: DataView, boundary: number, opts: IntegrityOptions = {},
+): { fixed: number; remaining: IntegrityIssue[] } {
     let fixed = 0;
     // 反覆跑到收斂（修一輪可能揭露/消除其他 issue）
     for (let pass = 0; pass < 4; pass++) {
-        const issues = analyzeIntegrity(grid, dv, boundary);
+        const issues = analyzeIntegrity(grid, dv, boundary, opts);
         const fixable = issues.filter(i => i.fix);
         if (fixable.length === 0) break;
         for (const i of fixable) { i.fix!(); fixed++; }
     }
-    return { fixed, remaining: analyzeIntegrity(grid, dv, boundary) };
+    return { fixed, remaining: analyzeIntegrity(grid, dv, boundary, opts) };
 }
 
 /**
