@@ -43,7 +43,8 @@ export type IssueKind =
     | 'zero-price'       // 土地(seg>0)的地段買價 = 0（引擎可能除以 0）
     | 'special-block'    // 圖塊排成完整的特殊地點 2x2，四格卻不同屬一個 locId
     | 'special-kind'     // 地點的 SPECIAL 欄位與圖塊畫出來的種類不符
-    | 'special-tile';    // 特殊圖塊沒排成完整 2x2（半個特殊地點），或佔 4 格卻沒有特殊圖塊
+    | 'special-tile'     // 特殊圖塊沒排成完整 2x2（半個特殊地點），或佔 4 格卻沒有特殊圖塊
+    | 'sea-road';        // 海上道路的編號沒有緊接在特殊地點之後（引擎會把落在界內的當特殊地點）
 
 export interface IntegrityIssue {
     kind: IssueKind;
@@ -248,6 +249,118 @@ export function unifySpecialBlock(grid: Uint16Array, dv: DataView, block: Specia
     }
 }
 
+// ============================================================================
+// 海上道路
+// ----------------------------------------------------------------------------
+// 海上道路跟陸上的一般道路不是同一種東西：它們是海面上的航路，只佔一格、沒有地段、
+// 也不是特殊地點，而且**編號緊接在特殊地點之後**（原版台灣＝特殊 1~23、海路 24~39）。
+//
+// 這個「緊接著」是硬性的：引擎用 [0x1098] 當界，1~N 全部會被當成特殊地點。
+// 所以特殊地點一增加，整段海路就得**一起往後挪**，中間不能留空號，也不能只把
+// 擋路的那一條搬到別的地方 —— 那會讓編號順序跟原版對不上。
+//
+// 方向指標不必自己算：renameLocation 會把所有指向舊編號的指標一起改，
+// 所以海路之間的連接會跟著位移，而頭尾接到土地/特殊地點的那兩條自然不會被動到。
+// ============================================================================
+
+/** 海上道路能用的最大編號。51 以上引擎當成土地，所以海路只能待在 ≤50。 */
+export const SEA_ROAD_ID_MAX = 50;
+
+/** 連號的一串編號縮寫成 24~39，不連號就照列。 */
+export function fmtRange(ids: number[]): string {
+    if (ids.length === 0) return '（無）';
+    if (ids.length > 2 && ids.every((v, i) => i === 0 || v === ids[i - 1] + 1)) {
+        return `${ids[0]}~${ids[ids.length - 1]}`;
+    }
+    return ids.join('、');
+}
+
+export interface SeaRoadScan {
+    /** 目前在用的海上道路編號（由小到大）。 */
+    ids: number[];
+    /** 依規則它們該用的編號（緊接在特殊地點之後、連號）。 */
+    want: number[];
+    /** 特殊地點數 —— 海路要從這個號碼 +1 開始。 */
+    specialCount: number;
+    /** 編號 ≤50、不是確認過的特殊地點、卻佔了不只一格的東西（不當成海路，也不動它）。 */
+    odd: number[];
+    ok: boolean;
+    error?: string;
+}
+
+/**
+ * 掃出海上道路：編號 ≤50、不是確認過的特殊地點、而且**只佔一格**的地點。
+ * 「只佔一格」這個條件是保險 —— 圖塊沒排好的 2x2 特殊地點會落在這個範圍裡，
+ * 但它不是海路，不該被重編號，所以另外列進 odd 讓警告頁去講。
+ */
+export function scanSeaRoads(
+    grid: Uint16Array, layout: Uint16Array, dv: DataView, boundary = 49, startAt?: number,
+): SeaRoadScan {
+    const sp = scanSpecials(grid, layout, dv, boundary);
+    const isSpecial = new Set(sp.confirmed.map(b => b.locId));
+    const ids: number[] = [], odd: number[] = [];
+    for (const [id, cells] of buildCellMap(grid)) {
+        if (id <= 0 || id > SEA_ROAD_ID_MAX || isSpecial.has(id)) continue;
+        (cells.length === 1 ? ids : odd).push(id);
+    }
+    ids.sort((a, b) => a - b);
+    odd.sort((a, b) => a - b);
+
+    const from = startAt ?? sp.count + 1;
+    const want = ids.map((_, i) => from + i);
+    const last = want.length > 0 ? want[want.length - 1] : 0;
+    return {
+        ids, want, odd, specialCount: sp.count,
+        ok: ids.length === want.length && ids.every((v, i) => v === want[i]),
+        error: last > SEA_ROAD_ID_MAX
+            ? `海上道路有 ${ids.length} 條，從 ${from} 排下去會排到 ${last}，超過上限 ${SEA_ROAD_ID_MAX}`
+            : undefined,
+    };
+}
+
+export interface SeaRoadRepair {
+    ok: boolean;
+    error?: string;
+    moved: { from: number; to: number }[];
+}
+
+/**
+ * 把海上道路整段重編成「緊接在特殊地點之後的連號」。
+ * startAt 可指定起始編號（`placeSpecial` 用它把整段往後推一格，空出新特殊地點要的號碼）。
+ *
+ * 搬家順序用貪心：每次挑一個目標編號目前是空的來搬。海路是保序位移，
+ * 往上挪時最大的那條一定先空得出來、往下挪時最小的那條一定先空得出來，所以不會卡住。
+ */
+export function repairSeaRoads(
+    grid: Uint16Array, layout: Uint16Array, dv: DataView, boundary = 49, startAt?: number,
+): SeaRoadRepair {
+    const scan = scanSeaRoads(grid, layout, dv, boundary, startAt);
+    if (scan.error) return { ok: false, error: scan.error, moved: [] };
+
+    const pending = scan.ids
+        .map((from, i) => ({ from, to: scan.want[i] }))
+        .filter(m => m.from !== m.to);
+    const moved: { from: number; to: number }[] = [];
+
+    let guard = pending.length * 2 + 4;
+    while (pending.length > 0 && guard-- > 0) {
+        const i = pending.findIndex(m => !locIdInUse(grid, dv, m.to));
+        if (i < 0) break;
+        const m = pending.splice(i, 1)[0];
+        if (!renameLocation(grid, dv, m.from, m.to)) {
+            return { ok: false, error: `把海上道路 ${m.from} 改成 ${m.to} 失敗`, moved };
+        }
+        moved.push(m);
+    }
+    if (pending.length > 0) {
+        return {
+            ok: false, moved,
+            error: `海上道路 ${pending.map(m => m.from).join('、')} 要換的編號被別的地點佔著，搬不過去`,
+        };
+    }
+    return { ok: true, moved };
+}
+
 export interface PlaceSpecialResult {
     ok: boolean;
     /** 'new'＝開了一個新的特殊地點；'kind'＝換既有那個的種類；'none'＝什麼都沒做。 */
@@ -256,8 +369,8 @@ export interface PlaceSpecialResult {
     locId?: number;
     /** 換種類時的原種類。 */
     kindFrom?: number;
-    /** 新編號原本被別的地點佔著，把它整個搬去別的號碼。 */
-    displaced?: { from: number; to: number };
+    /** 為了空出新編號，整段往後挪的海上道路。 */
+    seaMoved?: { from: number; to: number }[];
     /** 新地點自動接到的方向。 */
     wired?: { dir: string; tgt: number }[];
 }
@@ -317,22 +430,19 @@ export function placeSpecial(
         return { ok: false, mode: 'none', error: `特殊地點編號已經用到上限 ${boundary}，加不下去了` };
     }
 
-    // 那個號碼若被一般道路佔著，得先把道路整個搬到後面的空號（道路也必須留在 ≤boundary，
-    // 超過就會被引擎當成土地）。搬家由 renameLocation 負責，指向它的方向指標會一起改。
-    let displaced: { from: number; to: number } | undefined;
+    // 新編號通常正被海上道路的第一條佔著（海路緊接在特殊地點之後）。
+    // 把**整段海路往後挪一格**空出來 —— 不是把擋路的那條搬去別的空號，
+    // 那樣編號順序就跟原版對不上了。
+    let seaMoved: { from: number; to: number }[] | undefined;
     if (locIdInUse(grid, dv, newId)) {
-        let free = -1;
-        for (let id = newId + 1; id <= boundary; id++) if (!locIdInUse(grid, dv, id)) { free = id; break; }
-        if (free < 0) {
-            return {
-                ok: false, mode: 'none',
-                error: `編號 ${newId} 被既有地點佔著，而 ${newId + 1}~${boundary} 也找不到空號可以搬過去`,
-            };
+        const rep = repairSeaRoads(grid, layout, dv, boundary, newId + 1);
+        if (!rep.ok) {
+            return { ok: false, mode: 'none', error: `編號 ${newId} 要空出來給新的特殊地點，但海上道路挪不動：${rep.error}` };
         }
-        if (!renameLocation(grid, dv, newId, free)) {
-            return { ok: false, mode: 'none', error: `把既有的地點 ${newId} 搬到 ${free} 失敗` };
+        seaMoved = rep.moved;
+        if (locIdInUse(grid, dv, newId)) {
+            return { ok: false, mode: 'none', error: `編號 ${newId} 被既有地點佔著，而且它不是海上道路，沒辦法自動讓位` };
         }
-        displaced = { from: newId, to: free };
     }
 
     cells.forEach((ci, i) => { grid[ci] = newId; layout[ci] = tiles[i]; });
@@ -350,7 +460,7 @@ export function placeSpecial(
     setF(dv, LOC_FIELDS.UNKB, newId, 1);
 
     const wired = wireDirectionsFromGrid(grid, dv, newId);
-    return { ok: true, mode: 'new', locId: newId, displaced, wired };
+    return { ok: true, mode: 'new', locId: newId, seaMoved, wired };
 }
 
 export interface IntegrityOptions {
@@ -552,6 +662,28 @@ export function analyzeIntegrity(grid: Uint16Array, dv: DataView, boundary: numb
             issues.push({
                 kind: 'special-tile', locId: id,
                 detail: `地點 ${id} 佔了 2x2 四格，但圖塊不是任何一種特殊地點的連號四塊 → 確認不了它是哪種特殊地點`,
+            });
+        }
+
+        // 海上道路必須緊接在特殊地點之後、連號排下去
+        const sea = scanSeaRoads(grid, opts.layout, dv, boundary);
+        if (sea.error) {
+            issues.push({ kind: 'sea-road', locId: sea.ids[0] ?? 0, detail: sea.error });
+        } else if (!sea.ok && sea.ids.length > 0) {
+            const wrong = sea.ids.filter((v, i) => v !== sea.want[i]);
+            issues.push({
+                kind: 'sea-road', locId: wrong[0] ?? sea.ids[0],
+                detail: `海上道路目前是 ${fmtRange(sea.ids)}，但特殊地點有 ${sea.specialCount} 個，` +
+                    `海路應該是 ${fmtRange(sea.want)}（緊接在特殊地點之後、連號）。` +
+                    `落在 1~${sea.specialCount} 之內的會被引擎當成特殊地點，玩家踩上去可能當機。按「修復海路」整段重編`,
+                fix: () => { repairSeaRoads(grid, opts.layout!, dv, boundary); },
+            });
+        }
+        for (const id of sea.odd) {
+            issues.push({
+                kind: 'sea-road', locId: id,
+                detail: `地點 ${id} 的編號在海上道路的範圍（≤${SEA_ROAD_ID_MAX}），卻佔了不只一格 —— ` +
+                    `它不是海路（海路只佔一格），「修復海路」不會動它，請先確認它是什麼`,
             });
         }
     }

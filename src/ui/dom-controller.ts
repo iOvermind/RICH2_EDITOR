@@ -13,6 +13,7 @@ import {
   analyzeIntegrity, repairMap, findFreeLandId, nextLandId, findMarkerBase,
   wireDirectionsFromGrid, recomputeRouting, renumberSegment, type RoutingReport,
   scanSpecials, specialTilesOfKind, placeSpecial, type IntegrityOptions,
+  scanSeaRoads, repairSeaRoads, fmtRange,
 } from '../core/integrity';
 import {
   MAPS, TEXT_SOURCE_FILES, isSupported as fsSupported, hasFolder, pickGameFolder,
@@ -479,11 +480,16 @@ function runValidation(): void {
     locUsage[lid].push(i);
   }
 
+  // 一格一個編號是常態，但**特殊地點本來就佔 2x2 四格**——把確認過的特殊地點排除掉，
+  // 否則每張圖光是特殊地點就會噴出幾十筆假的「重複用於」，把真正的警告淹掉。
+  const okMulti = new Set(
+    workspace.locData ? specials().confirmed.map(b => b.locId) : [],
+  );
   for (const [lidStr, cells] of Object.entries(locUsage)) {
     const lid = parseInt(lidStr);
-    if (cells.length > 1) {
+    if (cells.length > 1 && !okMulti.has(lid)) {
       const coords = cells.map(ci => `(${ci % GRID_COLS},${Math.floor(ci / GRID_COLS)})`).join(', ');
-      warnings.push({ type: 'dup', cells, msg: `地點 ${lid} 重複用於 ${coords}` });
+      warnings.push({ type: 'dup', cells, msg: `地點 ${lid} 重複用於 ${coords}（只有特殊地點可以佔 2x2 四格）` });
     }
   }
 
@@ -1180,9 +1186,10 @@ function applySpecialToSelection(kind: number): void {
   }
 
   const gx = anchor % GRID_COLS, gy = Math.floor(anchor / GRID_COLS);
-  if (r.displaced) {
-    logMsg(`　編號 ${r.displaced.from} 原本被別的地點用著，已整個搬成 ${r.displaced.to}` +
-      `（grid 格子、記錄、指向它的方向指標一起搬）。`);
+  if (r.seaMoved && r.seaMoved.length > 0) {
+    const m = r.seaMoved.slice().sort((a, b) => a.from - b.from);
+    logMsg(`　海上道路整段往後挪一格空出編號：${fmtRange(m.map(x => x.from))} → ${fmtRange(m.map(x => x.to))}` +
+      `（共 ${m.length} 條；grid 格子、記錄、指向它們的方向指標一起改，接到土地/特殊地點的頭尾連接不動）。`);
   }
   logMsg(`🏛 (${gx},${gy}) 新增特殊地點 ${r.locId}「${name}」：圖塊 ${tiles[0]}~${tiles[3]}、佔 2x2 四格、` +
     `座標 (${gx},${gy})、SPECIAL=${kind}、地段=0。`);
@@ -1298,6 +1305,54 @@ if (repairMapBtn) {
     const { fixed, remaining } = repairMap(workspace.mapGrid, locDataView, getSpecialBoundary(), integrityOpts());
     logMsg(`🔧 修復完成：自動修正 ${fixed} 項；剩餘 ${remaining.length} 項需人工判斷（見警告頁）。`);
     renderer.redraw();
+    runValidation();
+  });
+}
+
+/** 把海上道路現況講成一句話，載入地圖與按「修復海路」都用它。 */
+function seaRoadSummary(): string {
+  const s = scanSeaRoads(workspace.mapGrid, workspace.mapLayout, locDataView!, getSpecialBoundary());
+  if (s.ids.length === 0) return '這張圖沒有海上道路。';
+  return `海上道路 ${s.ids.length} 條：編號 ${fmtRange(s.ids)}（特殊地點 ${s.specialCount} 個，海路應接在其後＝${fmtRange(s.want)}）` +
+    (s.ok ? '　✅ 位置正確。' : '　⚠ 對不上，按「修復海路」整段重編。');
+}
+
+// 「修復海路」：海上道路的編號必須緊接在特殊地點之後、連號排下去。
+// 引擎用 [0x1098] 當界，1~N 全被當成特殊地點，所以特殊地點一增加，整段海路就得往後挪，
+// 中間不能留空號。方向連接由 renameLocation 連帶修正（指向舊編號的指標一起改），
+// 接到土地/特殊地點的頭尾連接因為對方沒改號，自然不會被動到。
+const repairSeaBtn = document.getElementById('repairSeaBtn');
+if (repairSeaBtn) {
+  repairSeaBtn.addEventListener('click', function () {
+    flushAllEdits();
+    if (!locDataView) { logMsg('請先載入地圖才能修復海路！'); return; }
+    const before = scanSeaRoads(workspace.mapGrid, workspace.mapLayout, locDataView, getSpecialBoundary());
+    if (before.ids.length === 0) { logMsg('這張圖沒有海上道路，不用修。'); return; }
+    if (before.ok) { logMsg(`🌊 ${seaRoadSummary()}　不用動。`); return; }
+
+    mark('修復海路');
+    const r = repairSeaRoads(workspace.mapGrid, workspace.mapLayout, locDataView, getSpecialBoundary());
+    if (!r.ok) {
+      logMsg(`❌ 修復海路失敗：${r.error}`);
+      if (r.moved.length > 0) { doUndo(); logMsg('　已復原，地圖沒有被改到一半。'); }
+      return;
+    }
+    const m = r.moved.slice().sort((a, b) => a.from - b.from);
+    logMsg(`🌊 海上道路整段重編：${fmtRange(m.map(x => x.from))} → ${fmtRange(m.map(x => x.to))}（共改 ${m.length} 條）。`);
+    logMsg(`　方向連接一起修正了：指向這些海路的指標全部跟著改號；接到土地/特殊地點的頭尾連接沒有被動到。`);
+    for (const x of m.slice(0, 6)) {
+      const dirs = ([
+        [LOC_FIELDS.LEFT, '左'], [LOC_FIELDS.UP, '上'],
+        [LOC_FIELDS.RIGHT, '右'], [LOC_FIELDS.DOWN, '下'],
+      ] as const).map(([f, n]) => {
+        const t = getLocField(f, x.to);
+        return t ? `${n}→${t}` : '';
+      }).filter(Boolean).join('、');
+      logMsg(`　　${x.from} → ${x.to}　(${getLocField(LOC_FIELDS.X, x.to)},${getLocField(LOC_FIELDS.Y, x.to)})　${dirs}`);
+    }
+    if (m.length > 6) logMsg(`　　…還有 ${m.length - 6} 條`);
+    renderer.redraw();
+    drawSelection();
     runValidation();
   });
 }
@@ -1614,6 +1669,8 @@ async function loadMapFromFolder(idx: number): Promise<void> {
       exeSpecialCount = sc;
       logMsg(`目前【${m.name}】特殊地點數 [0x1098] = ${sc}（自動推算最大特殊編號 = ${autoSpecialCount()}）`);
     } catch { exeSpecialCount = null; /* 沒有 exe 也沒關係，只是不做比對 */ }
+    // 海上道路：編號緊接在特殊地點之後，跟陸上道路不是同一種東西，載入時先報現況
+    if (locDataView) logMsg(`🌊 ${seaRoadSummary()}`);
     runValidation();   // exe 值進來了，重跑一次才會出現「特殊數對不上」的警告
   } catch (err) {
     logMsg(`載入【${m.name}】失敗：${(err as Error).message}`);

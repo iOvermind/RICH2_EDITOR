@@ -121,7 +121,7 @@ await job('JetBrains Mono 400',
 
 // 3. 圖示：只要 UI 真的用到的那幾個，整包有好幾 MB
 const ICONS = ['add', 'add_home', 'auto_fix_high', 'folder_open', 'grid_view', 'healing',
-  'redo', 'route', 'save', 'sync', 'terminal', 'undo'];
+  'redo', 'route', 'save', 'sync', 'terminal', 'undo', 'waves'];
 await job(`Material Symbols（${ICONS.length} 個圖示）`,
   'https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1' +
   `&icon_names=${ICONS.join(',')}&display=block`,

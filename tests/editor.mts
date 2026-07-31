@@ -8,6 +8,7 @@ import {
   recomputeRouting, nextLandId, findMarkerBase, findRoutingEntries,
   analyzeIntegrity, renumberSegment, MAX_LOC_ID,
   scanSpecials, specialKindOfTile, specialTilesOfKind, placeSpecial,
+  scanSeaRoads, repairSeaRoads, SEA_ROAD_ID_MAX,
 } from '../src/core/integrity.ts';
 import { LOC_FIELDS, LAND_TILES, MARKER_TILE } from '../src/config/constants.ts';
 
@@ -504,7 +505,7 @@ console.log('\n=== 6c. 貼特殊地點 placeSpecial ===');
   const r = placeSpecial(grid, layout, dv, anchor, 8);   // 8 = 賭場
   eq('貼成功，而且是「新增」', [r.ok, r.mode], [true, 'new']);
   eq('新編號接在既有特殊地點之後', r.locId, 24);
-  eq('編號 24 原本是一般道路，整個搬到 40', r.displaced, { from: 24, to: 40 });
+  eq('編號 24 原本是海上道路，整段海路往後挪一格空出來', (r.seaMoved ?? []).length, 16);
   eq('四格圖塊 = 賭場的 72~75',
     [layout[anchor], layout[anchor + 1], layout[anchor + C], layout[anchor + C + 1]], [72, 73, 74, 75]);
   eq('四格 grid 都是新編號', [grid[anchor], grid[anchor + 1], grid[anchor + C], grid[anchor + C + 1]], [24, 24, 24, 24]);
@@ -541,6 +542,117 @@ console.log('\n=== 6c. 貼特殊地點 placeSpecial ===');
   eq('換種類不會多配一個編號', scanSpecials(grid, layout, dv).count, 24);
   const same = placeSpecial(grid, layout, dv, anchor, 1);
   check('種類沒變就什麼都不做', !same.ok && same.mode === 'none', `${same.mode}`);
+  }
+}
+
+// ==================== 6d. 海上道路 ====================
+// 海上道路跟陸上道路不是同一種：只佔一格、沒地段、不是特殊地點，而且編號**緊接在
+// 特殊地點之後**（原版台灣＝特殊 1~23、海路 24~39）。引擎用 [0x1098] 當界，
+// 1~N 全會被當成特殊地點，所以特殊地點一增加，整段海路就得一起往後挪。
+console.log('\n=== 6d. 海上道路 ===');
+{
+  // 大富翁城整張圖沒有海路（特殊地點吃到 40，41~50 整段空著）
+  const cases = [
+    { name: '台灣', dsk: 'Save_7', pak: 'Part1', want: [24, 39], n: 16, sp: 23 },
+    { name: '香港', dsk: 'Save_8', pak: 'Part2', want: [28, 39], n: 12, sp: 27 },
+    { name: '大富翁城', dsk: 'Save_9', pak: 'Part3', want: [], n: 0, sp: 40 },
+  ];
+  for (const c of cases) {
+    const m = loadMap(R, c.dsk, c.pak);
+    if (!m) { skip(`原版${c.name} 海上道路`, NO_ORIG); continue; }
+    const s = scanSeaRoads(m.grid, m.layout, m.dv);
+    eq(`原版${c.name}：特殊地點 ${c.sp} 個`, s.specialCount, c.sp);
+    eq(`原版${c.name}：海路 ${c.n} 條`, s.ids.length, c.n);
+    eq(`原版${c.name}：海路編號緊接在特殊地點之後`,
+      s.ids.length ? [s.ids[0], s.ids[s.ids.length - 1]] : [], c.want);
+    check(`原版${c.name}：海路編號本來就是連號正確的`, s.ok && !s.error, `ids=${s.ids} want=${s.want}`);
+    check(`原版${c.name}：沒有佔多格的東西混在海路編號區`, s.odd.length === 0, `${s.odd}`);
+    eq(`原版${c.name}：修復海路是零改動（規則與原版一致）`,
+      repairSeaRoads(m.grid, m.layout, m.dv).moved.length, 0);
+  }
+}
+
+// ==================== 6e. 新增特殊地點時海路整段往後挪 ====================
+console.log('\n=== 6e. 新增特殊地點 → 海路整段 +1 ===');
+{
+  const m = loadMap(R, 'Save_7', 'Part1');
+  if (!m) skip('海路整段位移', NO_ORIG);
+  else {
+  const { grid, layout, dv } = m;
+  const C = 36;
+  const g = (field: number, id: number) => dv.getUint16(field + id * 2, true);
+
+  // 使用者給的基準：原版 24 號在 (6,16)，左接 53（土地）、右接 25（下一條海路）
+  eq('動手前：24 號在 (6,16)', [g(LOC_FIELDS.X, 24), g(LOC_FIELDS.Y, 24)], [6, 16]);
+  eq('動手前：24 號 左→53、右→25', [g(LOC_FIELDS.LEFT, 24), g(LOC_FIELDS.RIGHT, 24)], [53, 25]);
+  const tail = g(LOC_FIELDS.DOWN, 39);   // 最後一條海路接到特殊地點 15
+  eq('動手前：39 號 下→15（接到特殊地點）', tail, 15);
+
+  let anchor = -1;
+  for (let y = 0; y < C - 1 && anchor < 0; y++) for (let x = 0; x < C - 1; x++) {
+    const i = y * C + x;
+    if (!grid[i] && !grid[i + 1] && !grid[i + C] && !grid[i + C + 1]) { anchor = i; break; }
+  }
+  const r = placeSpecial(grid, layout, dv, anchor, 8);
+  eq('新特殊地點拿到 24 號', [r.ok, r.locId], [true, 24]);
+  eq('16 條海路整段往後挪一格', (r.seaMoved ?? []).length, 16);
+  eq('挪法就是 24→25、39→40',
+    (r.seaMoved ?? []).slice().sort((a, b) => a.from - b.from).filter(x => x.from === 24 || x.from === 39),
+    [{ from: 24, to: 25 }, { from: 39, to: 40 }]);
+
+  // 使用者給的預期結果：變成 25 號在 (6,16)，左邊仍是 53、右邊變 26
+  eq('修正後：25 號在 (6,16)', [g(LOC_FIELDS.X, 25), g(LOC_FIELDS.Y, 25)], [6, 16]);
+  eq('修正後：25 號 左→53（接土地，不 +1）、右→26（接海路，+1）',
+    [g(LOC_FIELDS.LEFT, 25), g(LOC_FIELDS.RIGHT, 25)], [53, 26]);
+  eq('修正後：40 號 上→39、下→15（接特殊地點，不 +1）',
+    [g(LOC_FIELDS.UP, 40), g(LOC_FIELDS.DOWN, 40)], [39, 15]);
+  eq('24 號現在是新的特殊地點（賭場），不再是海路', g(LOC_FIELDS.SPECIAL, 24), 8);
+  check('24 號不再被當成海路', !scanSeaRoads(grid, layout, dv).ids.includes(24));
+
+  const s = scanSeaRoads(grid, layout, dv);
+  eq('海路變成 25~40，緊接在 24 個特殊地點之後', [s.specialCount, s.ids[0], s.ids[s.ids.length - 1]], [24, 25, 40]);
+  check('海路位置正確、沒有超過上限', s.ok && !s.error, `${s.error} ids=${s.ids}`);
+  const issues = analyzeIntegrity(grid, dv, 49, { layout });
+  check('沒有海路類警告', issues.filter(i => i.kind === 'sea-road').length === 0,
+    issues.filter(i => i.kind === 'sea-road').map(i => i.detail).join(' / '));
+  }
+}
+
+// ==================== 6f. 修復海路：抓得到、也修得動 ====================
+console.log('\n=== 6f. 修復海路 ===');
+{
+  const m = loadMap(R, 'Save_7', 'Part1');
+  if (!m) skip('修復海路', NO_ORIG);
+  else {
+  const { grid, layout, dv } = m;
+  const g = (field: number, id: number) => dv.getUint16(field + id * 2, true);
+
+  // 模擬「特殊地點加了、但海路忘了挪」：把海路整段往後推兩格，留下 24、25 的空號
+  for (let id = 39; id >= 24; id--) {
+    const ok = repairSeaRoads(grid, layout, dv, 49, 26).ok;
+    if (!ok) break;
+    break;
+  }
+  const shifted = scanSeaRoads(grid, layout, dv);
+  eq('先弄壞：海路變成 26~41，但特殊地點還是 23 個', [shifted.specialCount, shifted.ids[0]], [23, 26]);
+  check('弄壞後 scan 會說對不上', !shifted.ok, `ids=${shifted.ids}`);
+
+  const issues = analyzeIntegrity(grid, dv, 49, { layout });
+  const sea = issues.filter(i => i.kind === 'sea-road');
+  check('完整性檢查抓得到海路對不上', sea.length === 1 && typeof sea[0].fix === 'function',
+    sea.map(i => i.kind).join(','));
+  check('警告訊息講得出現況與應有的編號', /26~41/.test(sea[0]?.detail ?? '') && /24~39/.test(sea[0]?.detail ?? ''),
+    sea[0]?.detail);
+
+  const rep = repairSeaRoads(grid, layout, dv);
+  check('修復海路成功', rep.ok, rep.error);
+  eq('16 條全部搬回來', rep.moved.length, 16);
+  const after = scanSeaRoads(grid, layout, dv);
+  check('修完緊接在特殊地點之後', after.ok && after.ids[0] === 24, `ids=${after.ids}`);
+  eq('修完 24 號回到 (6,16)、左→53、右→25',
+    [g(LOC_FIELDS.X, 24), g(LOC_FIELDS.Y, 24), g(LOC_FIELDS.LEFT, 24), g(LOC_FIELDS.RIGHT, 24)], [6, 16, 53, 25]);
+  eq('修完 39 號 下→15（接特殊地點的頭尾連接沒被動到）', g(LOC_FIELDS.DOWN, 39), 15);
+  check(`海路上限是 ${SEA_ROAD_ID_MAX}`, SEA_ROAD_ID_MAX === 50);
   }
 }
 
