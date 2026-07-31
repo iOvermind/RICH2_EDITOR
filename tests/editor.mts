@@ -317,7 +317,12 @@ console.log('\n=== 5c-2. 遊戲字表（Wor.pak，全遊戲共用）===');
     for (let i = 0; i < b.length; i += 2) out.push(iconv.decode(b.slice(i, i + 2), 'big5'));
     return out;
   };
-  const wor = readIfExists(LIVE && `${LIVE}/Wor.pak`);
+  // 加字是編輯器的功能（存檔時會自動把缺字補進 Wor.pak），所以「原版 639 項」這類斷言
+  // 一定要對著**沒被動過的那份**做，否則用過一次自動補字，測試就全紅。
+  // 編輯器第一次覆寫 Wor.pak 前會留下 .bak，那份就是基準；沒有 .bak 代表還沒被改過。
+  const worLive = readIfExists(LIVE && `${LIVE}/Wor.pak`);
+  const wor = readIfExists(LIVE && `${LIVE}/Wor.pak.bak`) ?? worLive;
+  const patched = !!(worLive && wor !== worLive);
   const sets = new Map<string, Set<string>>();
   for (const [name, pak] of [['台灣', 'Part1'], ['香港', 'Part2'], ['大富翁城', 'Part3']] as const) {
     const buf = readIfExists(R && `${R}/${pak}.pak`);
@@ -399,8 +404,38 @@ console.log('\n=== 5c-2. 遊戲字表（Wor.pak，全遊戲共用）===');
         check('三張圖文字用到的上界互不相同（但字形是整份共用）',
           new Set(['台灣', '香港', '大富翁城'].map(maxOf)).size === 3);
       }
-      eq('「苗」「栗」不在表內', ['苗', '栗'].map(c => table!.includes(c)), [false, false]);
+      eq('「苗」「栗」不在原版表內', ['苗', '栗'].map(c => table!.includes(c)), [false, false]);
       eq('「澎」「湖」在表內', ['澎', '湖'].map(c => table!.includes(c)), [true, true]);
+    }
+
+    // ── 加字後的 Wor.pak 仍須自洽 ──
+    // 字表與字形是兩個等長的陣列（glyph[i] ↔ table[i]），任何一邊漏加都會整份錯位。
+    // 字形區＝前 1664 bytes 的繪圖查表 + 每字 30 bytes（見 docs/runexe-re.md §7）。
+    if (!patched) skip('加字後的 Wor.pak', '目前的 Wor.pak 就是原版（沒有 .bak）');
+    else {
+      const FONT_HEADER = 1664, GLYPH = 30;
+      let live: string[] | null = null, liveFont: Buffer | null = null;
+      const lp = ptrs(worLive!);
+      for (const p of lp) { live = parseTable(decompress(worLive!, p)); if (live) break; }
+      if (lp.length > 1) liveFont = decompress(worLive!, lp[1]);
+      check('加字後仍認得出字表', live !== null);
+      if (live && liveFont && table) {
+        check(`字數只增不減（${table.length} → ${live.length}）`, live.length >= table.length, `${live.length}`);
+        eq(`原版那 ${table.length} 項一個沒動`, live.slice(0, table.length).join(''), table.join(''));
+        const glyphCount = Math.floor((liveFont.length - FONT_HEADER) / GLYPH);
+        eq('字形數 = 字表項數（漏一邊就整份錯位）', glyphCount, live.length);
+        const added = live.slice(table.length);
+        check(`新加的字（${added.join('') || '無'}）字形都不是空白`,
+          added.every((_, i) => {
+            const o = FONT_HEADER + (table.length + i) * GLYPH;
+            return liveFont!.subarray(o, o + GLYPH).some(v => v !== 0);
+          }));
+        check('新加的字 Big5 首位元組都 ≥ 0xA1（否則遊戲會排版錯位）',
+          added.every(c => iconv.encode(c, 'big5')[0] >= 0xa1));
+        // 引擎很可能靠「字表配置尾端那段 0」判斷表到哪結束，配置是進位到 16 bytes 的段落
+        const slack = (Math.ceil(live.length * 2 / 16) * 16) - live.length * 2;
+        check(`字表沒有卡在段落邊界（餘裕 ${slack} bytes）`, slack !== 0, `${slack}`);
+      }
     }
   }
 }

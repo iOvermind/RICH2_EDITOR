@@ -19,6 +19,7 @@ import {
   MAPS, CHAR_TABLE_FILE, isSupported as fsSupported, hasFolder, pickGameFolder,
   readFile as readGameFile, tryReadFile, writeFile as writeGameFile, patchExe, readSpecialCount, readCaps,
 } from '../core/gamefolder';
+import { loadGlyphAtlas, atlasReady, canAddChar, addCharsToGameFont } from '../core/gamefont';
 import { History } from '../core/history';
 import { initTilePicker, updateTilePickerSelection } from '../ui/tilepicker';
 import { initDebugTools } from '../tools/debugger';
@@ -160,20 +161,34 @@ function previewInGame(name: string): string {
   return out;
 }
 
-/** 把缺字講成一句人看得懂的話。傳入原名稱就會順便把「遊戲實際顯示的樣子」印出來。 */
+/**
+ * 把缺字講成一句人看得懂的話。傳入原名稱就會順便把「遊戲實際顯示的樣子」印出來。
+ *
+ * 缺字現在分兩種下場：**點陣圖庫畫得出來的會在存檔時自動補進 `Wor.pak`**，
+ * 所以那些字不必再嚇使用者；只有「圖庫也沒有」跟「Big5 罕用字」才是真的要換字。
+ */
 function unsupportedMsg(bad: BadChar[], badName = ''): string {
   if (bad.length === 0) return '';
   const tail = charTable.length ? charTable[charTable.length - 1] : '';
   const desync = bad.filter(b => b.why === 'desync');
   const miss = bad.filter(b => b.why === 'missing').map(b => b.ch);
-  let s = badName ? `　👉 遊戲裡會顯示成「${previewInGame(badName)}」。` : '';
+  const fixable = atlasReady() ? miss.filter(canAddChar) : [];
+  const hopeless = miss.filter(ch => !fixable.includes(ch));
+
+  // 自動補得起來的字，遊戲最後會正常顯示，就別再拿「會變成邦」嚇人
+  let s = (badName && (desync.length || hopeless.length))
+    ? `　👉 遊戲裡會顯示成「${previewInGame(badName)}」。` : '';
   if (desync.length) {
     const shown = desync.map(b => `「${b.ch}」` + (b.asAscii ? `→「${b.asAscii}」` : '')).join('、');
     s += `　❌ ${shown}：這些是 Big5 罕用字（首位元組 < 0xA1），遊戲不認得雙位元組開頭，` +
-      `會把低位元組當成英數字印出來，後面整串排版跟著錯開。務必換字。`;
+      `會把低位元組當成英數字印出來，後面整串排版跟著錯開。加進字表也沒用，務必換字。`;
   }
-  if (miss.length) {
-    s += `　⚠ 「${miss.join('」「')}」不在遊戲字表裡` +
+  if (fixable.length) {
+    s += `　🆕 「${fixable.join('」「')}」不在遊戲字表裡，<b>存檔時會自動用細明體補進字型</b>（${CHAR_TABLE_FILE}），補完就正常顯示。`;
+  }
+  if (hopeless.length) {
+    s += `　⚠ 「${hopeless.join('」「')}」不在遊戲字表裡` +
+      (atlasReady() ? '，點陣圖庫裡也沒有，補不進去' : '') +
       (tail ? `，會顯示成字表最後一個字「${tail}」` : '，會顯示成別的字') +
       `（三張圖都一樣）。`;
   }
@@ -1719,7 +1734,24 @@ function parseCharTable(bytes: Uint8Array): string[] | null {
   return out;
 }
 
+/** 把讀到／補完的字表灌回快取。缺字警告與「遊戲會顯示成什麼」都吃這兩份資料。 */
+function setCharTable(tbl: string[]): void {
+  charTable.length = 0;
+  charTable.push(...tbl);
+  gameCharset.clear();
+  for (const ch of tbl) if (HAN.test(ch)) gameCharset.add(ch);
+}
+
 async function buildGameCharset(): Promise<void> {
+  // 點陣圖庫決定「缺字補不補得起來」，跟資料夾無關，先載起來（失敗也不擋編輯）
+  if (!atlasReady()) {
+    try {
+      await loadGlyphAtlas();
+      logMsg('已載入細明體點陣圖庫，缺字可在存檔時自動補進遊戲字型。');
+    } catch (err) {
+      logMsg(`⚠ 點陣圖庫載入失敗（${(err as Error).message}），缺字只能提醒、無法自動補。`);
+    }
+  }
   if (gameCharset.size > 0) return;
 
   // 1) 首選：Wor.pak 裡那張全遊戲共用的字表。這是權威來源 —— 它決定了遊戲畫得出哪些字，
@@ -1757,6 +1789,66 @@ async function buildGameCharset(): Promise<void> {
   }
   if (gameCharset.size > 0) {
     logMsg(`找不到 ${CHAR_TABLE_FILE}，改用三張圖原版文字推出的字集：${gameCharset.size} 個漢字。`);
+  }
+}
+
+/**
+ * 存檔時自動補字：掃過**真的會寫進 PAK 的那份文字**，把遊戲畫不出來的字
+ * 加進 `Wor.pak` 的字表與字形。
+ *
+ * 為什麼綁在存檔而不是打字當下：打一個字就寫一次磁碟太粗暴，而且名稱還在改的中途，
+ * 會把半成品的字一起塞進字表。存檔是文字定案、本來就要落地的時間點。
+ *
+ * 只看 `pakTextLines`（PAK 第 3 組）——超出原生 44 段的額外地段沒有對應行、進不了遊戲，
+ * 幫它們補字沒有意義。
+ */
+async function autoPatchGameFont(): Promise<void> {
+  // 圖庫平常在選資料夾時就載好了，但那條路不是唯一入口（重整後沒重選資料夾就會沒載到）。
+  // 這裡補載一次，免得整個功能默默不動、使用者還以為沒生效。
+  if (!atlasReady()) {
+    try { await loadGlyphAtlas(); } catch (err) {
+      logMsg(`　字型：點陣圖庫載入失敗（${(err as Error).message}），這次不補字。`);
+      return;
+    }
+  }
+  if (charTable.length === 0) {
+    logMsg(`　字型：讀不到 ${CHAR_TABLE_FILE} 的字表，這次不補字。`);
+    return;
+  }
+
+  const need = new Set<string>(), desync = new Set<string>(), noGlyph = new Set<string>();
+  for (const line of workspace.pakTextLines) {
+    for (const b of unsupportedChars(line)) {
+      if (b.why === 'desync') desync.add(b.ch);
+      else if (canAddChar(b.ch)) need.add(b.ch);
+      else noGlyph.add(b.ch);
+    }
+  }
+
+  // 不管有沒有事做都要回報一句 —— 「沒有輸出」跟「沒有生效」在畫面上長得一樣，
+  // 使用者無從判斷，這正是上一版最大的問題。
+  if (need.size === 0) {
+    logMsg(`　字型：地圖文字沒有需要補的字（目前字表 ${charTable.length} 字）。`);
+  } else {
+    const before = charTable.length;
+    const r = await addCharsToGameFont([...need], logMsg);
+    setCharTable(r.table);
+    logMsg(`🆕 ${CHAR_TABLE_FILE}：已補上「${r.added.join('」「')}」共 ${r.added.length} 個字` +
+      `（字表 ${before} → ${r.table.length}，字形用細明體點陣）。`);
+    for (const ch of r.noGlyph) noGlyph.add(ch);
+  }
+
+  // 補不了的兩種，每次存檔都講一次 —— 它們會讓遊戲畫面出錯，不該被忽略
+  if (desync.size) {
+    const shown = [...desync].map(ch => {
+      const b5 = iconv.encode(ch, 'big5');
+      return `「${ch}」(${b5[0].toString(16)} ${b5[1].toString(16)})`;
+    }).join('、');
+    logMsg(`　❌ 字型：${shown} 是 Big5 罕用字，首位元組 < 0xA1 —— 遊戲不把它當雙位元組開頭，` +
+      `會把低位元組當英數字印出來、後面整串排版跟著錯開。<b>這種字加進字表也沒用</b>，只能換字。`);
+  }
+  if (noGlyph.size) {
+    logMsg(`　⚠ 字型：「${[...noGlyph].join('」「')}」細明體點陣圖庫裡沒有，補不進去，會顯示成字表最後一個字。`);
   }
 }
 
@@ -1799,6 +1891,13 @@ async function saveToGame(): Promise<void> {
       const issues = analyzeIntegrity(workspace.mapGrid, locDataView, getSpecialBoundary(), integrityOpts());
       if (issues.length) logMsg(`⚠ 偵測到 ${issues.length} 個結構問題（見警告頁），仍照你的意思寫回。`);
     }
+    // 缺字先補進遊戲字型，再寫地圖 —— 補失敗就別寫出「遊戲畫不出來的名字」
+    try {
+      await autoPatchGameFont();
+    } catch (err) {
+      logMsg(`⚠ 自動補字失敗（${(err as Error).message}），${CHAR_TABLE_FILE} 未更動，地圖照常寫回。`);
+    }
+
     const dskBuf = rebuildDskBuffer();
     const pakBuf = rebuildPakBuffer();
     if (dskBuf) await writeGameFile(loadedDskFileName, dskBuf, logMsg);
