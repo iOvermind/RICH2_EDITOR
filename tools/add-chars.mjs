@@ -5,6 +5,7 @@
  *   node tools/add-chars.mjs 苗 栗          # 加這兩個字
  *   node tools/add-chars.mjs 苗栗宜蘭        # 連在一起也可以
  *   node tools/add-chars.mjs --force 鰂      # 連 Big5 首位元組 < 0xA1 的罕用字也加（做實驗用）
+ *   node tools/add-chars.mjs --remove 鰂     # 把加過的字拿掉（原版那 639 個字動不了）
  *   node tools/add-chars.mjs                # 不給參數＝預設的「苗栗」
  *
  * 背景見 docs/runexe-re.md §7、§8：
@@ -37,6 +38,7 @@ const DX = 2, DY = -1;
 
 const args = process.argv.slice(2);
 const FORCE = args.includes('--force');
+const REMOVE = args.includes('--remove');
 const argChars = [...args.filter(a => !a.startsWith('--')).join('')].filter(c => /\S/.test(c));
 const WANT = argChars.length ? argChars : ['苗', '栗'];
 
@@ -171,35 +173,69 @@ const fontCount = Math.floor((font.length - FONT_HEADER) / GLYPH);
 if (n !== fontCount) throw new Error(`字數對不上：字表 ${n}、字形 ${fontCount}`);
 console.log(`原版：字表 ${n} 字、字形 ${fontCount} 字`);
 
-// ── 決定要加哪些字 ──────────────────────────────────────────────────────
-const existing = iconv.decode(Buffer.from(table), 'big5');
-const add = [], skip = [];
-for (const ch of WANT) {
-  const code = iconv.encode(ch, 'big5');
-  if (code.length !== 2) throw new Error(`「${ch}」不是 2-byte Big5`);
-  if (code[0] < 0xa1) {
-    // 遊戲實測顯示這種字會排版錯位（「鰂」→「o」），加進字表照理沒用。
-    // --force 是拿來驗證這個前提的：真的加下去，看遊戲畫不畫得出來。
-    if (!FORCE) throw new Error(`「${ch}」的 Big5 首位元組 0x${code[0].toString(16)} < 0xA1，遊戲會排版錯位（要實驗請加 --force）`);
-    console.log(`  ⚠ 「${ch}」首位元組 0x${code[0].toString(16)} < 0xA1，--force 照加，結果請進遊戲確認`);
-  }
-  if (existing.includes(ch) || add.some(a => a.ch === ch)) { skip.push(ch); continue; }
-  add.push({ ch, code });
+// ── 原版有哪些字（.bak 就是原版）：那些字動不得，地圖原文正在用 ──────────
+function baselineChars() {
+  if (!fs.existsSync(BAK)) return null;
+  const b = fs.readFileSync(BAK);
+  const offs = [];
+  for (let p = PTR_BASE; ; p += 2) { const v = b.readUInt16LE(p); if (!v) break; offs.push(PTR_BASE + v * 2); }
+  return iconv.decode(decompress(b, offs[4]), 'big5');
 }
-if (skip.length) console.log(`已在表內／重複，略過：${skip.join('、')}`);
-if (!add.length) { console.log('沒有要加的字，結束。'); process.exit(0); }
 
-console.log(`用 ${FONT_NAME} ${FONT_PX}px 渲染 ${add.length} 個字…`);
-const glyphs = renderGlyphs(add.map(a => a.ch));
-add.forEach((a, i) => {
-  console.log(`\n  「${a.ch}」 Big5 ${a.code[0].toString(16)} ${a.code[1].toString(16)} → index ${n + i}`);
-  console.log(artOf(glyphs[i]).map(r => '  ' + r).join('\n'));
-});
-
-// ── 組出新的兩組 ────────────────────────────────────────────────────────
-const newTable = Buffer.concat([table, ...add.map(a => a.code)]);
+let newTable, newFont;
 const cut = FONT_HEADER + fontCount * GLYPH;
-const newFont = Buffer.concat([font.subarray(0, cut), ...glyphs, font.subarray(cut)]);
+const existing = iconv.decode(Buffer.from(table), 'big5');
+
+if (REMOVE) {
+  // ── 拿掉字 ────────────────────────────────────────────────────────────
+  const base = baselineChars();
+  const drop = new Set(), miss = [], locked = [];
+  for (const ch of WANT) {
+    const i = existing.indexOf(ch);
+    if (i < 0) { miss.push(ch); continue; }
+    if (base && base.includes(ch)) { locked.push(ch); continue; }
+    drop.add(i);
+  }
+  if (miss.length) console.log(`不在表內，略過：${miss.join('、')}`);
+  if (locked.length) throw new Error(`「${locked.join('」「')}」是原版就有的字，地圖原文正在用，不能拿掉`);
+  if (!drop.size) { console.log('沒有要拿掉的字，結束。'); process.exit(0); }
+
+  const keep = [...Array(n).keys()].filter(i => !drop.has(i));
+  console.log(`拿掉 ${drop.size} 個字：${[...drop].map(i => existing[i]).join('')}（字表 ${n} → ${keep.length}）`);
+  newTable = Buffer.concat(keep.map(i => table.subarray(i * 2, i * 2 + 2)));
+  newFont = Buffer.concat([
+    font.subarray(0, FONT_HEADER),
+    ...keep.map(i => font.subarray(FONT_HEADER + i * GLYPH, FONT_HEADER + (i + 1) * GLYPH)),
+    font.subarray(cut),                       // 尾端的餘料原樣留著
+  ]);
+} else {
+  // ── 加字 ──────────────────────────────────────────────────────────────
+  const add = [], skip = [];
+  for (const ch of WANT) {
+    const code = iconv.encode(ch, 'big5');
+    if (code.length !== 2) throw new Error(`「${ch}」不是 2-byte Big5`);
+    if (code[0] < 0xa1) {
+      // 遊戲實測顯示這種字會排版錯位（「鰂」→「o」），加進字表照理沒用。
+      // --force 是拿來驗證這個前提的：真的加下去，看遊戲畫不畫得出來。
+      if (!FORCE) throw new Error(`「${ch}」的 Big5 首位元組 0x${code[0].toString(16)} < 0xA1，遊戲會排版錯位（要實驗請加 --force）`);
+      console.log(`  ⚠ 「${ch}」首位元組 0x${code[0].toString(16)} < 0xA1，--force 照加，結果請進遊戲確認`);
+    }
+    if (existing.includes(ch) || add.some(a => a.ch === ch)) { skip.push(ch); continue; }
+    add.push({ ch, code });
+  }
+  if (skip.length) console.log(`已在表內／重複，略過：${skip.join('、')}`);
+  if (!add.length) { console.log('沒有要加的字，結束。'); process.exit(0); }
+
+  console.log(`用 ${FONT_NAME} ${FONT_PX}px 渲染 ${add.length} 個字…`);
+  const glyphs = renderGlyphs(add.map(a => a.ch));
+  add.forEach((a, i) => {
+    console.log(`\n  「${a.ch}」 Big5 ${a.code[0].toString(16)} ${a.code[1].toString(16)} → index ${n + i}`);
+    console.log(artOf(glyphs[i]).map(r => '  ' + r).join('\n'));
+  });
+
+  newTable = Buffer.concat([table, ...add.map(a => a.code)]);
+  newFont = Buffer.concat([font.subarray(0, cut), ...glyphs, font.subarray(cut)]);
+}
 
 const slack = (Math.ceil(newTable.length / 16) * 16) - newTable.length;
 console.log(`\n新字表 ${newTable.length} bytes（${newTable.length / 2} 字），段落餘裕 ${slack} bytes` +
