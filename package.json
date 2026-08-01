@@ -8,11 +8,15 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "node --import ./tests/loader.mjs tests/editor.mts",
-    "package": "node tools/package.mjs"
+    "package": "node tools/package.mjs",
+    "tauri": "tauri",
+    "app:dev": "tauri dev",
+    "app:build": "tauri build"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.11",
     "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/iconv-lite": "^0.0.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.9.3",
@@ -20,6 +24,9 @@
     "vite-plugin-node-polyfills": "^0.25.0"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-fs": "^2.5.1",
     "buffer": "^6.0.3",
     "iconv-lite": "^0.7.2"
   }

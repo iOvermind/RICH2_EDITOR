@@ -16,7 +16,7 @@ import {
   scanSeaRoads, repairSeaRoads, fmtRange, MAX_LOC_ID,
 } from '../core/integrity';
 import {
-  MAPS, CHAR_TABLE_FILE, isSupported as fsSupported, hasFolder, pickGameFolder,
+  MAPS, CHAR_TABLE_FILE, isSupported as fsSupported, backendKind, hasFolder, pickGameFolder,
   readFile as readGameFile, tryReadFile, writeFile as writeGameFile, patchExe, readSpecialCount, readCaps,
 } from '../core/gamefolder';
 import { loadGlyphAtlas, atlasReady, canAddChar, addCharsToGameFont } from '../core/gamefont';
@@ -2041,8 +2041,9 @@ if (pickFolderBtn) {
   if (!fsSupported()) {
     (pickFolderBtn as HTMLButtonElement).disabled = true;
     pickFolderBtn.textContent = '瀏覽器不支援資料夾存取';
-    logMsg('此瀏覽器不支援 File System Access API，請用 Chrome/Edge，或改用手動 LOAD/匯出。');
+    logMsg('此瀏覽器不支援 File System Access API（只有 Chromium 系有）。請改用 Chrome/Edge，或下載桌面版。');
   } else {
+    if (backendKind() === 'tauri') logMsg('桌面版：直接讀寫遊戲資料夾，不需要瀏覽器授權。');
     pickFolderBtn.addEventListener('click', async () => {
       try {
         const name = await pickGameFolder();

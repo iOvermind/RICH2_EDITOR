@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "編輯器需要挑選遊戲資料夾，並讀寫其中的 PAK / DSK / EXE。fs:scope 開成 ** 是刻意的：遊戲可能裝在任何地方，而使用者是透過系統的資料夾對話框自己挑的，範圍寫死反而會擋掉正常用法。",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "fs:allow-read-file",
+    "fs:allow-write-file",
+    "fs:allow-exists",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        {
+          "path": "**"
+        }
+      ]
+    }
+  ]
+}

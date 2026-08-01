@@ -124,7 +124,29 @@ npm run build
 node tools/fetch-fonts.mjs
 ```
 
-### 打包成應用程式
+### 桌面版（Tauri）
+
+```bash
+npm run app:dev        # 開發：原生視窗 + Vite HMR
+npm run app:build      # → src-tauri/target/release/bundle/nsis/*-setup.exe
+```
+
+產出 **3.8 MB 執行檔 / 1.6 MB 安裝檔**。原生視窗、自己的圖示、不需要瀏覽器也不會跳黑視窗。
+
+建置需要 **Rust + MSVC Build Tools**（`winget install Rustlang.Rustup` 與 VS Build Tools 的「使用 C++ 的桌面開發」）。執行只需要 WebView2 Runtime，Windows 10/11 內建。
+
+檔案存取抽在 `src/core/folder-backend.ts`，執行期自動選：
+
+| 環境 | 後端 |
+|---|---|
+| Tauri 桌面版 | `plugin-fs` + `plugin-dialog`，沒有權限提示 |
+| 瀏覽器 | File System Access API，要授權、且只有 Chromium 系有 |
+
+備份、格式解析、exe patch 那些邏輯兩邊完全共用。
+
+圖示由 `tools/make-icon.ps1` 產生（棋盤 + 細明體的「富」），再用 `npx tauri icon` 切各尺寸。
+
+### 瀏覽器版打包（不需要 Rust）
 
 ```bash
 npm run package        # → release/Rich2Editor-vX.Y.Z.zip（約 0.5 MB）

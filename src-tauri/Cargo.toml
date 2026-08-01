@@ -1,0 +1,22 @@
+[package]
+name = "rich2-editor"
+version = "0.0.0"
+description = "大富翁2 地圖編輯器"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+
+# 這是要發佈給人下載的桌面工具，體積比編譯時間重要。
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
