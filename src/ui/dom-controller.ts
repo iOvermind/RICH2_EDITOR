@@ -1138,13 +1138,18 @@ function mouseToGrid(e: MouseEvent): { gx: number; gy: number } | null {
 const selection = new Set<number>();                  // 已選取的格子（grid index）
 let dragging = false;
 let dragStart: { gx: number; gy: number } | null = null;
-let dragLast: { gx: number; gy: number } | null = null;
+/** 目前選取範圍的寬高，只拿來顯示（例如「5 × 4 = 20 格」） */
+let selectionSize: { w: number; h: number } = { w: 0, h: 0 };
 
 function updateSelectionLabel(): void {
   const el = document.getElementById('selectionLabel');
   if (!el) return;
   if (selection.size === 0) { el.textContent = '尚未選取'; el.className = 'font-bold text-on-surface-variant/50'; }
-  else { el.textContent = `${selection.size} 格`; el.className = 'font-bold text-primary'; }
+  else {
+    const { w, h } = selectionSize;
+    el.textContent = selection.size === 1 ? '1 格' : `${w} × ${h} = ${selection.size} 格`;
+    el.className = 'font-bold text-primary';
+  }
 }
 
 /** 把選取範圍畫到畫布上。每次 redraw 之後都要補畫，因為 redraw 會蓋掉。 */
@@ -1152,13 +1157,18 @@ function drawSelection(): void {
   if (selection.size === 0) return;
   ctx.save();
   ctx.fillStyle = 'rgba(229, 20, 0, 0.25)';
-  ctx.strokeStyle = '#e51400';
-  ctx.lineWidth = 2;
+  let x0 = GRID_COLS, y0 = GRID_ROWS, x1 = -1, y1 = -1;
   for (const ci of selection) {
     const gx = ci % GRID_COLS, gy = Math.floor(ci / GRID_COLS);
     ctx.fillRect(gx * TILE_W, gy * TILE_H, TILE_W, TILE_H);
-    ctx.strokeRect(gx * TILE_W + 1, gy * TILE_H + 1, TILE_W - 2, TILE_H - 2);
+    if (gx < x0) x0 = gx; if (gx > x1) x1 = gx;
+    if (gy < y0) y0 = gy; if (gy > y1) y1 = gy;
   }
+  // 外框只畫整個範圍一圈：每格都描邊的話，選一大片會整塊糊成紅色
+  ctx.strokeStyle = '#e51400';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x0 * TILE_W + 1, y0 * TILE_H + 1,
+    (x1 - x0 + 1) * TILE_W - 2, (y1 - y0 + 1) * TILE_H - 2);
   ctx.restore();
 }
 function redrawWithSelection(): void {
@@ -1166,20 +1176,18 @@ function redrawWithSelection(): void {
   drawSelection();
 }
 
-/** 兩點之間補齊（Bresenham）：滑鼠移太快時才不會跳格漏選。 */
-function selectLine(a: { gx: number; gy: number }, b: { gx: number; gy: number }): void {
-  let x0 = a.gx, y0 = a.gy;
-  const x1 = b.gx, y1 = b.gy;
-  const dx = Math.abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-  const dy = -Math.abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
-  let err = dx + dy;
-  for (;;) {
-    selection.add(y0 * GRID_COLS + x0);
-    if (x0 === x1 && y0 === y1) break;
-    const e2 = 2 * err;
-    if (e2 >= dy) { err += dy; x0 += sx; }
-    if (e2 <= dx) { err += dx; y0 += sy; }
-  }
+/**
+ * 選取「起點到終點框出來的整個矩形」。
+ *
+ * 舊版是沿著滑鼠軌跡逐格選（Bresenham 補線），但那個操作很難框出一塊區域 ——
+ * 想選 20x20 就得把整片塗滿。矩形選取只看起點與終點，中間怎麼繞都不影響結果。
+ */
+function selectRect(a: { gx: number; gy: number }, b: { gx: number; gy: number }): void {
+  const x0 = Math.min(a.gx, b.gx), x1 = Math.max(a.gx, b.gx);
+  const y0 = Math.min(a.gy, b.gy), y1 = Math.max(a.gy, b.gy);
+  selection.clear();
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) selection.add(y * GRID_COLS + x);
+  selectionSize = { w: x1 - x0 + 1, h: y1 - y0 + 1 };
 }
 
 canvas.addEventListener('mousedown', function (e: MouseEvent) {
@@ -1188,20 +1196,17 @@ canvas.addEventListener('mousedown', function (e: MouseEvent) {
   if (!p) return;
   dragging = true;
   dragStart = p;
-  dragLast = p;
-  selection.clear();                                  // 每次重新拖曳都是全新的選取
-  selection.add(p.gy * GRID_COLS + p.gx);
+  selectRect(p, p);                                   // 每次重新拖曳都是全新的選取
   updateSelectionLabel();
   e.preventDefault();
 });
 
 canvas.addEventListener('mousemove', function (e: MouseEvent) {
-  if (!dragging || !dragLast) return;
+  if (!dragging || !dragStart) return;
   const p = mouseToGrid(e);
   if (!p) return;
-  if (p.gx === dragLast.gx && p.gy === dragLast.gy) return;
-  selectLine(dragLast, p);
-  dragLast = p;
+  // 每次都從起點重算整個矩形 —— 往回拖也要跟著縮，不能只累加
+  selectRect(dragStart, p);
   updateSelectionLabel();
   redrawWithSelection();
 });
@@ -1211,8 +1216,11 @@ window.addEventListener('mouseup', function () {
   if (!dragging) return;
   dragging = false;
   const start = dragStart;
-  dragStart = null; dragLast = null;
-  if (selection.size > 1) logMsg(`已選取 ${selection.size} 格 —— 到「圖塊」頁點一個圖塊就會一次套用到全部。`);
+  dragStart = null;
+  if (selection.size > 1) {
+    logMsg(`已選取 ${selectionSize.w} × ${selectionSize.h} = ${selection.size} 格` +
+      ` —— 到「圖塊」頁點一個圖塊就會一次套用到全部。`);
+  }
   if (start) openEditPanel(start.gx, start.gy);       // 編輯面板顯示起點那格
   updateSelectionLabel();
   drawSelection();
@@ -1865,6 +1873,7 @@ function refreshAfterLoad(): void {
   selectedGridX = -1;
   selectedGridY = -1;
   selection.clear();
+  selectionSize = { w: 0, h: 0 };
   updateSelectionLabel();
   // 這兩份是「超出原生 45 段的額外地段」暫存，換地圖後必須清掉，否則會污染新地圖
   for (const k of Object.keys(extraSegNames)) delete extraSegNames[Number(k)];
