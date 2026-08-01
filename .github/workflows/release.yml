@@ -1,0 +1,88 @@
+# 推一個 v* 開頭的 tag 就自動建置桌面版並發佈到 Releases。
+#
+#   git tag v1.0.1 && git push origin v1.0.1
+#
+# 只跑 Windows：這是 Windows 專用工具（遊戲是 DOS/Windows 的，字形圖庫也是用
+# GDI+ 烤出來的），沒有跨平台的需求。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:        # 也可以手動觸發，方便重跑失敗的建置
+
+permissions:
+  contents: write           # 建立 Release、上傳產物
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # windows runner 內建 Rust 與 MSVC，不必自己裝
+      - name: 環境
+        run: |
+          node --version
+          cargo --version
+          rustc --version
+
+      # Rust 相依編一次要好幾分鐘，快取起來
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: 安裝相依
+        run: npm ci
+
+      # 遊戲檔不在版控裡，所以吃遊戲資料的那些測試會自動略過（不會失敗）。
+      # 剩下的純邏輯測試照跑，還是擋得住回歸。
+      - name: 回歸測試
+        run: npm test
+
+      - name: 建置
+        run: npx tauri build
+
+      - name: 收產物
+        shell: pwsh
+        run: |
+          $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          $t = 'src-tauri\target\release'
+          Copy-Item "$t\rich2-editor.exe" "release\Rich2Editor-v$v-portable.exe"
+          Copy-Item "$t\bundle\nsis\Rich2 Editor_${v}_x64-setup.exe" "release\Rich2Editor-v$v-setup.exe"
+          Get-ChildItem release | Format-Table Name, @{n='MB';e={'{0:N2}' -f ($_.Length/1MB)}}
+
+      - name: 發佈
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $notes = @"
+          ## 下載
+
+          | 檔案 | 說明 |
+          |---|---|
+          | ``Rich2Editor-$tag-setup.exe`` | 安裝檔，裝到使用者目錄，不需要管理員權限 |
+          | ``Rich2Editor-$tag-portable.exe`` | 免安裝，直接執行 |
+
+          兩個內容一樣，挑順手的。需要 Windows 10 以上。
+
+          使用說明：[docs/使用說明.md](https://github.com/${{ github.repository }}/blob/main/docs/%E4%BD%BF%E7%94%A8%E8%AA%AA%E6%98%8E.md)
+
+          > 開始編輯前，建議先把整個遊戲資料夾另外複製一份。
+          "@
+          gh release create $tag (Get-ChildItem release\*.exe | ForEach-Object { $_.FullName }) `
+            --title "Rich2 Editor $tag" --notes $notes
