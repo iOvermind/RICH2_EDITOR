@@ -116,7 +116,9 @@ npm run build
 
 介面不連任何 CDN：Tailwind 由 Vite 在建置時產出（色票與字體設定寫在 `src/style.css` 的 `@theme`），字體與圖示自帶在 `src/assets/fonts/`。
 
-中文字體只含**介面用得到的字 + 遊戲字型字集**（`docs/game-charset.txt`），整包 CJK 有好幾 MB，子集化後約 590 KB。UI 文案有增刪、或換了 Material Symbols 圖示時，重新產生一次：
+**文字用系統字體，不自帶。** 缺字會自動補進遊戲字型，所以地段名稱可以用任何遊戲畫得出來的字 —— 那是 13,895 個碼位，自帶子集永遠不夠用（全部打包單一字重 3.8 MB、三個字重 11.4 MB）。與其塞一份會缺字的子集，不如直接吃系統字體，任何機器上都不會有缺字。字體堆疊在 `src/style.css` 的 `@theme`。
+
+自帶的只剩 **Material Symbols 圖示字體（6.5 KB）**——少了它按鈕會顯示 `folder_open`、`undo` 這些英文字。介面換了新圖示時重新產生一次（會自動掃 `index.html` 找出用到哪些圖示）：
 
 ```bash
 node tools/fetch-fonts.mjs

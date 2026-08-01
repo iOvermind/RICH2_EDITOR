@@ -26,14 +26,14 @@
   --color-tertiary: #66dd8b;
   --color-error: #ffb4ab;
 
-  /* 自帶的 Noto Sans TC 是**子集化**的：只含介面文案 + 遊戲原版字表那 626 個字
-     （見 tools/fetch-fonts.mjs）。但缺字功能上線後，使用者可以打任何遊戲畫得出來的字
-     ——那是 13,895 個碼位，全部打包進來單一字重就要 3.8 MB、三個字重 11.4 MB，不划算。
-     所以後面明確接上系統的 CJK 字體，讓超出子集的字有**確定**的落點，
-     而不是聽任瀏覽器自己亂挑（那會變成每台機器長得不一樣）。 */
-  --font-headline: "Noto Sans", "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", "Hiragino Sans", sans-serif;
-  --font-body: "Noto Sans", "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", "Hiragino Sans", sans-serif;
-  --font-mono: "JetBrains Mono", monospace;
+  /* 文字一律用系統字體，不自帶。
+     缺字會自動補進遊戲字型，所以使用者可以打任何遊戲畫得出來的字 —— 那是 13,895 個
+     碼位，自帶子集永遠不夠用（全部打包單一字重 3.8 MB、三個字重 11.4 MB）。
+     與其塞一份會缺字的子集，不如直接吃系統字體，任何機器上都不會有缺字。
+     ⚠ 圖示字體（Material Symbols）還是自帶的，見 assets/fonts/fonts.css。 */
+  --font-headline: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, "Microsoft JhengHei", monospace;
 }
 
 /* =========================================
