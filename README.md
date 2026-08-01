@@ -124,6 +124,26 @@ npm run build
 node tools/fetch-fonts.mjs
 ```
 
+### 打包成應用程式
+
+```bash
+npm run package        # → release/Rich2Editor-vX.Y.Z.zip（約 0.5 MB）
+```
+
+解開後雙擊 `Rich2Editor.bat` 就能用，**不需要安裝 Node**。裡面是一個 PowerShell 寫的極簡靜態伺服器（`packaging/serve.ps1`），會挑一個空閒的埠、用 Edge/Chrome 的 `--app=` 模式開一個無網址列的視窗，關掉視窗就自動結束。
+
+**為什麼要伺服器、不能直接雙擊 HTML**：編輯器靠 File System Access API 讀寫遊戲資料夾，而 Vite 的輸出是 ES module —— 從 `file://` 載入會被 CORS 擋掉。
+
+**為什麼不打包成 exe**：Node 的單一執行檔要 100 MB 上下，而且未簽章的 exe 會被 SmartScreen 擋。PowerShell 是 Windows 內建的，所以整包下載就只有應用程式本身的大小。
+
+⚠ `serve.ps1` 必須是 **UTF-8 with BOM**：Windows PowerShell 5.1 讀 `.ps1` 預設用系統 ANSI 碼頁，沒有 BOM 的話裡面的中文會把字串拆壞、直接變成語法錯誤。
+
+除錯時可以只起伺服器不開瀏覽器：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\serve.ps1 -NoBrowser
+```
+
 ### 測試
 ```bash
 npm test
