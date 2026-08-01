@@ -1456,18 +1456,12 @@ function rebuildPakBuffer(): ArrayBuffer | null {
 // 註：UI 改版後已無「匯出 DSK / 匯出 PAK」按鈕，改用「儲存到遊戲」直接寫回資料夾。
 // 對應的 downloadBuffer / exportDskBtn / exportPakBtn 三段死碼已移除
 // （其中 exportDskBtn 未加 null 防護，曾害得它之後的所有事件綁定全部失效）。
+//
+// 「Sync Marker」也一起移除了：它依 OWNER/HOUSE 把 +950 標記格換成圖塊 2，但
+// **圖塊 2 在三張原版圖裡從未出現過**，OWNER/HOUSE 也全是 0 —— 開局本來就沒人有地。
+// 也就是說「圖塊 2 ＝ 已購買的標記」只是當初的猜測，而那段程式綁在每次存檔自動跑，
+// 一旦有人去編 OWNER/HOUSE 就會默默把格子畫成錯的圖。
 
-(document.getElementById('syncMarkerBtn') as HTMLButtonElement).addEventListener('click', function () {
-  flushAllEdits();
-  const syncFn = (window as any).syncMarkerTilesFromOwnership;
-  if (typeof syncFn !== 'function') {
-    logMsg("同步函式尚未就緒（請稍後再試）");
-    return;
-  }
-  mark('同步購地標記圖塊');
-  syncFn(1, 2);
-  logMsg("已依 OWNER/HOUSE 自動同步 loc+950 的購地標記圖塊。");
-});
 
 // 「修復地圖」：自動修可安全修的（座標同步、清除孤兒記錄），其餘列在警告頁
 const repairMapBtn = document.getElementById('repairMapBtn');
@@ -2120,9 +2114,6 @@ async function saveToGame(): Promise<void> {
   if (!hasFolder()) { logMsg('請先「選擇遊戲資料夾」。'); return; }
   if (!workspace.isSaveLoaded) { logMsg('尚未載入地圖，無法存回。'); return; }
   try {
-    const syncFn = (window as any).syncMarkerTilesFromOwnership;
-    // 這一步會改 mapLayout（依 OWNER/HOUSE 換購地標記圖塊），所以也要能復原
-    if (typeof syncFn === 'function') { mark('儲存前同步購地標記'); syncFn(1, 2); }
     if (locDataView) {
       const issues = analyzeIntegrity(workspace.mapGrid, locDataView, getSpecialBoundary(), integrityOpts());
       if (issues.length) logMsg(`⚠ 偵測到 ${issues.length} 個結構問題（見警告頁），仍照你的意思寫回。`);

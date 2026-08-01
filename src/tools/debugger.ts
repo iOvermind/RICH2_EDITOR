@@ -107,33 +107,6 @@ export function initDebugTools(context: {
         console.log(`simulatePurchaseLink: 已更新 baseLoc=${baseLocId}`);
     };
 
-    // === 3. 自動同步購地標記 ===
-    (window as any).syncMarkerTilesFromOwnership = function (emptyTileId: number = 1, ownedTileId: number = 2): number {
-        const locDataView = getLocDataView();
-        if (!locDataView || !mapGrid.length || !mapLayout.length) {
-            console.warn("請先載入 DSK/PAK。"); return 0;
-        }
-        let touched = 0;
-        for (let base = 0x33; base <= LOC_COUNT; base++) {
-            const segId = getLocField(LOC_FIELDS.SEGMENT, base);
-            if (segId <= 0) continue;
-            const owner = getLocField(LOC_FIELDS.OWNER, base);
-            const house = getLocField(LOC_FIELDS.HOUSE, base);
-            const targetTile = (owner > 0 || house > 0) ? ownedTileId : emptyTileId;
-            const markerLocId = base + 950;
-            for (let i = 0; i < mapGrid.length; i++) {
-                if (mapGrid[i] !== markerLocId) continue;
-                if (mapLayout[i] !== targetTile) {
-                    mapLayout[i] = targetTile;
-                    touched++;
-                }
-            }
-        }
-        checkAndRenderRealMap();
-        console.log(`syncMarkerTilesFromOwnership 完成，更新 ${touched} 個標記圖塊。`);
-        return touched;
-    };
-
     // === 4. 掃描除以 0 地雷 ===
     (window as any).scanZero = function () {
         const locDataView = getLocDataView();
