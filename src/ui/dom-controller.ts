@@ -285,7 +285,13 @@ bindLiveField('segNameDisplay', '改地段名稱', (raw) => {
   const el = document.getElementById('segNameDisplay') as HTMLInputElement | null;
   if (el && el.value !== applied) el.value = applied;   // 顯示正規化後的結果
   const bad = unsupportedChars(applied);
-  logMsg(`地段 ${segId} 名稱改為「${applied}」（存檔時寫回 PAK）。` + unsupportedMsg(bad, applied));
+  // PAK 的文字表只有 44 行（line 26~69），編號 ≥45 的地段沒有對應行、名字寫不回去。
+  // 以前是默默不寫，畫面上看起來像成功了 —— 這種假成功比報錯還糟。
+  const noLine = segId >= PRICE_SEG_COUNT;
+  logMsg(`地段 ${segId} 名稱改為「${applied}」` +
+    (noLine ? `　❌ <b>但這個名字進不了遊戲</b>：PAK 的文字表只有 ${PRICE_SEG_COUNT - 1} 行，編號 ≥${PRICE_SEG_COUNT} 的地段沒有位置可寫，只有編輯器自己看得到。`
+            : '（存檔時寫回 PAK）。') +
+    unsupportedMsg(bad, applied));
   renderPriceTable(segId);
 });
 
@@ -592,6 +598,29 @@ function runValidation(): void {
       const cells: number[] = [];
       for (let i = 0; i < workspace.mapGrid.length; i++) if (workspace.mapGrid[i] === iss.locId) { cells.push(i); break; }
       warnings.push({ type: iss.kind, cells, msg: `【完整性/${iss.kind}】${iss.detail}` });
+    }
+  }
+
+  // === 編號 ≥45 的地段：名稱與價格都沒有地方存 ===
+  // PAK 文字表只有 44 行、價格表也只有 44 組，超出的地段在遊戲裡沒有名字也沒有價格。
+  if (workspace.locData) {
+    const extra = new Map<number, number[]>();   // segId → 用到它的地點
+    for (let id = 1; id < LOC_COUNT; id++) {
+      const seg = getLocField(LOC_FIELDS.SEGMENT, id);
+      if (seg >= PRICE_SEG_COUNT) {
+        if (!extra.has(seg)) extra.set(seg, []);
+        extra.get(seg)!.push(id);
+      }
+    }
+    for (const [seg, ids] of [...extra].sort((a, b) => a[0] - b[0])) {
+      const cells: number[] = [];
+      for (let i = 0; i < workspace.mapGrid.length; i++) if (workspace.mapGrid[i] === ids[0]) { cells.push(i); break; }
+      warnings.push({
+        type: 'seg-overflow', cells,
+        msg: `【地段/超出】地段 ${seg} 超過 PAK 的上限 ${PRICE_SEG_COUNT - 1} —— 名稱與價格都沒有地方存，` +
+          `遊戲裡這些地（${ids.slice(0, 8).join('、')}${ids.length > 8 ? `…共 ${ids.length} 塊` : ''}）會沒有名字也買不了。` +
+          `　請把它們併進 1~${PRICE_SEG_COUNT - 1} 的地段。`,
+      });
     }
   }
 
