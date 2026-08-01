@@ -142,6 +142,14 @@ input[type="number"]::-webkit-outer-spin-button {
   box-sizing: border-box;
 }
 
+/* 選擇器的圖案會被放大到「跟地圖上一格一樣大」（見 tilepicker.ts 的
+   syncTilePickerScale）。backing store 維持原生 24x20，只放大 CSS 尺寸，
+   所以一定要關掉平滑化，否則點陣圖會糊成一團。 */
+.tile-art {
+  image-rendering: pixelated;
+  display: block;
+}
+
 .tile-btn.selected {
   border-color: #e51400; /* 選取時的紅框 */
 }

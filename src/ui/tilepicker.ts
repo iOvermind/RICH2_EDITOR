@@ -70,6 +70,7 @@ export function initTilePicker(
                 drawTile(cctx, mapTilesData, palette, TILE_W, TILE_H, base + 2, 0, TILE_H);
                 drawTile(cctx, mapTilesData, palette, TILE_W, TILE_H, base + 3, TILE_W, TILE_H);
             }
+            c.className = 'tile-art';
             box.appendChild(c);
 
             const cap = document.createElement('span');
@@ -89,7 +90,7 @@ export function initTilePicker(
         const c = document.createElement('canvas');
         c.width = TILE_W;
         c.height = TILE_H;
-        c.className = 'tile-btn';
+        c.className = 'tile-btn tile-art';
         c.dataset.tile = t.toString();      // 位置 ≠ 圖塊編號了，用 data 屬性對應
         c.title = `圖塊 #${t}`;
 
@@ -120,4 +121,28 @@ export function updateTilePickerSelection(tileId: number): void {
     if (!sel) return;
     sel.classList.add('selected');
     (sel as HTMLElement).scrollIntoView({ block: 'nearest' });
+}
+
+/**
+ * 讓選擇器裡的圖案跟**地圖上一格的實際顯示大小**一樣大。
+ *
+ * 地圖 canvas 是固定的 864x720，靠 CSS 的 `object-fit: contain` 撐滿左邊區域，
+ * 所以一格在螢幕上到底幾像素要看視窗多大 —— 用 getBoundingClientRect 反推那個比例，
+ * 再把同樣的比例套到選擇器的 canvas 上（backing store 維持原生解析度，只放大 CSS 尺寸，
+ * 配合 image-rendering: pixelated 才不會糊掉）。
+ *
+ * 視窗大小一變就要重算，所以 dom-controller 綁了 resize。
+ */
+export function syncTilePickerScale(mapCanvas: HTMLCanvasElement, tileW: number, tileH: number): void {
+    const rect = mapCanvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    // object-fit: contain → 兩軸取小的那個比例
+    const scale = Math.min(rect.width / mapCanvas.width, rect.height / mapCanvas.height);
+    if (!isFinite(scale) || scale <= 0) return;
+    for (const el of document.querySelectorAll<HTMLCanvasElement>('.tile-art')) {
+        // 特殊地點那顆是 2x2，用它自己的 canvas 寬度換算，不要寫死
+        const cells = el.width / tileW;
+        el.style.width = `${tileW * cells * scale}px`;
+        el.style.height = `${tileH * (el.height / tileH) * scale}px`;
+    }
 }

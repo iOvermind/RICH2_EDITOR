@@ -249,6 +249,23 @@
               <span class="material-symbols-outlined text-xs">auto_fix_high</span>帶入過路費
             </button>
           </div>
+          <!-- 地價標準化：所有地段依「土地價格 × 倍率」重算其餘欄位 -->
+          <div class="bg-surface-container-lowest rounded-md border border-outline-variant/10 p-3 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider">地價標準化</span>
+              <button id="normalizePriceBtn"
+                title="把每個地段的增值價與各級過路費，全部改成「該地段的土地價格 × 下面的倍率」。土地價格本身不動。"
+                class="btn-unified btn-primary px-2 py-1 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 shrink-0">
+                <span class="material-symbols-outlined text-xs">sync</span>套用到所有地段
+              </button>
+            </div>
+            <div class="text-[10px] text-on-surface-variant/70 leading-relaxed">
+              原版比例：台灣／香港 <b>0.15 / 0.2 / 0.6 / 1.43 / 2.86 / 5 / 7.5</b>，
+              大富翁城整條往上挪一格 <b>0.2 / 0.625 / 1.5 / 3 / 5 / 8 / 11.67</b>。
+            </div>
+            <div id="ratioRow" class="grid grid-cols-7 gap-1"></div>
+          </div>
+
           <div class="bg-surface-container-lowest rounded-md overflow-hidden border border-outline-variant/10">
             <table id="priceTable" class="w-full text-left text-xs">
               <thead class="bg-surface-container-high text-on-surface-variant">

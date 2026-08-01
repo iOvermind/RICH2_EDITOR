@@ -21,7 +21,7 @@ import {
 } from '../core/gamefolder';
 import { loadGlyphAtlas, atlasReady, canAddChar, addCharsToGameFont } from '../core/gamefont';
 import { History } from '../core/history';
-import { initTilePicker, updateTilePickerSelection } from '../ui/tilepicker';
+import { initTilePicker, updateTilePickerSelection, syncTilePickerScale } from '../ui/tilepicker';
 import { initDebugTools } from '../tools/debugger';
 import { MapRenderer } from '../render/renderer';
 
@@ -392,6 +392,7 @@ function copySegmentPrices(fromSeg: number, toSeg: number): number {
 }
 
 function renderPriceTable(segId: number): void {
+  initRatioRow();   // 倍率列只建一次，順手在這裡確保它存在
   currentPriceSeg = segId;
   (document.getElementById('priceSegLabel') as HTMLSpanElement).textContent =
     segId > 0 ? `${segId} - ${getSegName(segId)}` : '無（非土地）';
@@ -787,6 +788,9 @@ function openEditPanel(gridX: number, gridY: number): void {
       onSpecial: applySpecialToSelection,
       specialName: (k: number) => getSpecialName(k) || `種類${k}`,
     });
+
+    // 圖案放大到跟地圖上一格一樣（視窗大小會影響，所以每次建完都算一次）
+    syncTilePickerScale(canvas, TILE_W, TILE_H);
 
     // 自動更新 UI 紅框與捲動位置
     updateTilePickerSelection(tileId);
@@ -1587,6 +1591,71 @@ if (recomputeRouteBtn) {
 }
 
 // 「複製價格」：把另一個地段的完整價格結構(土地價/增值/各級過路費)複製到目前地段
+// ==== 地價標準化 ====
+// 每個地段的「增值價 + 空地~五層過路費」都改成「該地段的土地價格 × 倍率」。
+// 土地價格本身不動 —— 那是設計者定的，倍率只負責把衍生欄位算齊。
+//
+// 預設值取自使用者指定的 0.15/0.2/0.6/1.5/3/5/8。原版其實是三張圖各一套：
+// 台灣／香港 ≈ 0.15/0.2/0.6/1.43/2.86/5/7.5，大富翁城整條往上挪一格
+// ≈ 0.2/0.625/1.5/3/5/8/11.67。所以倍率做成可編輯，不寫死。
+const NORMALIZE_FIELDS = [1, 2, 3, 4, 5, 6, 7];   // 增值價、空地、一~五層
+const DEFAULT_RATIOS = [0.15, 0.2, 0.6, 1.5, 3, 5, 8];
+
+function ratioInputs(): HTMLInputElement[] {
+  return [...document.querySelectorAll<HTMLInputElement>('#ratioRow input')];
+}
+
+/** 建出七個倍率欄位（欄位名稱直接取自 PRICE_FIELDS，不另外維護一份標籤） */
+function initRatioRow(): void {
+  const row = document.getElementById('ratioRow');
+  if (!row || row.children.length > 0) return;
+  NORMALIZE_FIELDS.forEach((fi, i) => {
+    const cell = document.createElement('label');
+    cell.className = 'flex flex-col gap-0.5';
+    cell.innerHTML = `
+      <span class="text-[9px] text-on-surface-variant/70 text-center leading-none">${PRICE_FIELDS[fi].replace('過路費', '').replace('價格', '')}</span>
+      <input type="number" step="0.01" min="0" value="${DEFAULT_RATIOS[i]}"
+             class="input-unified w-full px-1 py-1 text-[11px] font-mono text-center">`;
+    row.appendChild(cell);
+  });
+}
+
+const normalizePriceBtn = document.getElementById('normalizePriceBtn');
+if (normalizePriceBtn) {
+  normalizePriceBtn.addEventListener('click', () => {
+    flushAllEdits();
+    if (!priceDataView) { logMsg('請先載入 DSK！'); return; }
+    const ratios = ratioInputs().map(i => parseFloat(i.value));
+    if (ratios.length !== NORMALIZE_FIELDS.length || ratios.some(r => !isFinite(r) || r < 0)) {
+      logMsg('⚠ 倍率要是 0 以上的數字。'); return;
+    }
+    // 先算出會動到哪些地段，沒事做就別留一筆空的復原記錄
+    const targets: number[] = [];
+    for (let seg = 1; seg < PRICE_SEG_COUNT; seg++) if (getPriceField(0, seg) > 0) targets.push(seg);
+    if (targets.length === 0) { logMsg('沒有任何地段設了土地價格，沒得標準化。'); return; }
+
+    mark('地價標準化');
+    let changed = 0, clamped = 0;
+    for (const seg of targets) {
+      const base = getPriceField(0, seg);
+      NORMALIZE_FIELDS.forEach((fi, i) => {
+        // 欄位是 u16，超過就會捲回去變成很小的數字 —— 夾住並回報，不要默默算錯
+        let v = Math.round(base * ratios[i]);
+        if (v > 65535) { v = 65535; clamped++; }
+        if (getPriceField(fi, seg) !== v) { setPriceField(fi, seg, v); changed++; }
+      });
+    }
+    const shown = targets.slice(0, 3).map(seg => {
+      const base = getPriceField(0, seg);
+      return `${getSegName(seg) || '地段' + seg}(${base})→${NORMALIZE_FIELDS.map(fi => getPriceField(fi, seg)).join('/')}`;
+    }).join('　');
+    logMsg(`💰 地價標準化：${targets.length} 個地段、改了 ${changed} 個欄位` +
+      `（倍率 ${ratios.join('/')}）。${shown}${targets.length > 3 ? '　…' : ''}`);
+    if (clamped) logMsg(`　⚠ 有 ${clamped} 個欄位算出來超過 65535，已夾在上限（欄位是 16 位元）。`);
+    if (currentPriceSeg > 0) renderPriceTable(currentPriceSeg);
+  });
+}
+
 const autoFillPriceBtn = document.getElementById('autoFillPriceBtn');
 if (autoFillPriceBtn) {
   autoFillPriceBtn.addEventListener('click', function () {
@@ -2035,6 +2104,9 @@ async function saveToGame(): Promise<void> {
     logMsg(`存回失敗：${(err as Error).message}`);
   }
 }
+
+// 視窗一改大小，地圖那格在螢幕上的尺寸就變了，選擇器要跟著縮放
+window.addEventListener('resize', () => syncTilePickerScale(canvas, TILE_W, TILE_H));
 
 const pickFolderBtn = document.getElementById('pickFolderBtn');
 if (pickFolderBtn) {
