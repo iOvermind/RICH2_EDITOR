@@ -1,34 +1,31 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
+
+!.vscode/extensions.json
+# DOSBox-X（本機除錯用，勿提交）
+# Editor directories and files
+# Logs
+# 第三方工具（LZEXE/UNLZEXE），不進版控
+*.local
+*.log
+*.njsproj
+*.ntvs*
+*.sln
+*.suo
+*.sw?
+.DS_Store
+.idea
+.vscode/*
+DOSBox-X/
 dist
 dist-ssr
-*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-original/
-rich2/
-# DOSBox-X（本機除錯用，勿提交）
-DOSBox-X/
-
-# 第三方工具（LZEXE/UNLZEXE），不進版控
+lerna-debug.log*
+logs
 lzexe91e/
-
+node_modules
+npm-debug.log*
+original/
+pnpm-debug.log*
 release/
+rich2/
+yarn-debug.log*
+yarn-error.log*

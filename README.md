@@ -128,8 +128,20 @@ node tools/fetch-fonts.mjs
 
 ```bash
 npm run app:dev        # 開發：原生視窗 + Vite HMR
-npm run app:build      # → src-tauri/target/release/bundle/nsis/*-setup.exe
-```
+build-app.bat          # 發佈：測試 → 建置 → 產物收進 release```
+
+`build-app.bat` 可以直接雙擊。它會先跑回歸測試（掛了就不浪費那幾分鐘去編 Rust），
+建完把兩個產物收進 `release/`：
+
+| 產物 | 大小 |
+|---|---|
+| `Rich2Editor-v1.0.0-portable.exe` | 3.86 MB（直接執行） |
+| `Rich2Editor-v1.0.0-setup.exe` | 1.65 MB（安裝到使用者目錄，不需管理員） |
+
+參數：`-SkipTests` 跳過測試、`-Clean` 清掉 Rust 快取（清完第一次要重編十幾分鐘）。
+
+⚠ **rustup 裝完不會進到已經開著的 shell 的 PATH**，`cargo not found` 是最常見的第一個坑，
+所以腳本會自己去 `~\.cargoin` 找。
 
 產出 **3.8 MB 執行檔 / 1.6 MB 安裝檔**。原生視窗、自己的圖示、不需要瀏覽器也不會跳黑視窗。
 
