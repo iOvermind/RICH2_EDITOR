@@ -60,6 +60,13 @@ async function fileExists(name: string): Promise<boolean> {
  * 寫入（覆蓋）資料夾內某檔。
  * 第一次覆蓋前會自動備份成 `<檔名>.bak`（已存在就不再覆蓋，保住最原始那份）。
  * 這件事很重要：DSK/PAK 一旦被編輯器覆寫就回不去了，而遊戲原版檔通常沒有別的來源。
+ *
+ * ⚠ **`Run.exe.bak` 不要拿來整檔還原。** `Run.exe` 裡有三個位元組
+ * （`0xBFE`、`0xC49E`、`0xC4A2`）**是遊戲自己寫的**——它偵測完硬體後會把音效／顯示
+ * 設定寫回執行檔。`.bak` 是出廠原版，整檔覆蓋等於把那些偵測結果清回預設值，
+ * 實測過一次「進遊戲後配色跑掉、接著花屏」，時間點與還原 `Run.exe` 吻合。
+ * 要撤銷編輯器的 patch，只改那幾個容量位元組就好（見 MAPS 的 exeMaxLocOffset /
+ * exeSpecialOffset），別整檔覆蓋。
  */
 export async function writeFile(
     name: string, data: ArrayBuffer | Uint8Array, onLog?: (m: string) => void,
