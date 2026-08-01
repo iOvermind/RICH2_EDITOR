@@ -5,6 +5,7 @@ import { decompressGeneralData } from '../utils/compression';
 import {
   GRID_COLS, GRID_ROWS, TILE_W, TILE_H, palette,
   PRICE_FIELD_COUNT, PRICE_SEG_COUNT, PRICE_FIELD_SIZE, PRICE_FIELDS,
+  PLAYER_SLOTS, PLAYER_FIELD_COUNT, PLAYER_FIELDS,
   LOC_COUNT, LOC_FIELDS, LAND_TILES, MARKER_TILE, MARKER_ID_OFFSET, SPECIAL_KIND_COUNT
 } from '../config/constants';
 import { replaceGroupInDsk, rebuildDskBufferCore, parsePackPointers } from '../core/parser';
@@ -375,7 +376,6 @@ function getPriceField(fieldIdx: number, segId: number): number {
 
 function setPriceField(fieldIdx: number, segId: number, val: number): void {
   if (!priceDataView || segId <= 0 || segId >= PRICE_SEG_COUNT) return;
-  console.log(`setPriceField fi=${fieldIdx} seg=${segId} val=${val}`);  // 加這行
   priceDataView.setUint16(fieldIdx * PRICE_FIELD_SIZE + segId * 2, val, true);
 }
 
@@ -1411,7 +1411,7 @@ function rebuildDskBuffer(): ArrayBuffer | null {
     priceDataView = newPriceDV;
   }
 
-  return rebuildDskBufferCore(workspace.rawDskBuffer, workspace.dskGroupPointers, workspace.mapLayout, workspace.locData, finalPriceData, logMsg);
+  return rebuildDskBufferCore(workspace.rawDskBuffer, workspace.dskGroupPointers, workspace.mapLayout, workspace.locData, finalPriceData, workspace.playerData, logMsg);
 }
 
 // === 新增：重建 PAK 檔案的函式 ===
@@ -1591,6 +1591,81 @@ if (recomputeRouteBtn) {
 }
 
 // 「複製價格」：把另一個地段的完整價格結構(土地價/增值/各級過路費)複製到目前地段
+// ==== 角色參數（DSK 第 1 組）====
+// 排法與地點資料同一套：u32[欄位][角色]，欄位各自連續、每列 6 個角色。
+// 角色名稱不在這一組，而是在該圖 PAK 文字表的第 1~6 行。
+function playerView(): DataView | null {
+  const d = workspace.playerData;
+  return d ? new DataView(d.buffer, d.byteOffset, d.byteLength) : null;
+}
+const playerOffset = (field: number, slot: number) => (field * PLAYER_SLOTS + slot) * 4;
+
+function getPlayerField(field: number, slot: number): number {
+  const dv = playerView();
+  return dv ? dv.getUint32(playerOffset(field, slot), true) : 0;
+}
+function setPlayerField(field: number, slot: number, val: number): void {
+  const dv = playerView();
+  if (dv) dv.setUint32(playerOffset(field, slot), val >>> 0, true);
+}
+
+/** 這張圖實際有幾個角色：任一欄位非 0 就算數（台灣 4、香港 5、大富翁城 6） */
+function activePlayerSlots(): number {
+  let n = 0;
+  for (let slot = 0; slot < PLAYER_SLOTS; slot++) {
+    for (let f = 0; f < PLAYER_FIELD_COUNT; f++) {
+      if (getPlayerField(f, slot) !== 0) { n = slot + 1; break; }
+    }
+  }
+  return n;
+}
+
+/** 角色名稱取自 PAK 文字表 line 1~6（每張圖自己一組），取不到就用「角色 N」 */
+function playerName(slot: number): string {
+  const line = workspace.pakTextLines[slot + 1];
+  const nm = (line ?? '').replace(/[\s　]+/g, '');
+  return nm || `角色 ${slot + 1}`;
+}
+
+function renderPlayerTable(): void {
+  const head = document.getElementById('playerHead');
+  const body = document.getElementById('playerTbody');
+  if (!head || !body) return;
+  const slots = activePlayerSlots();
+  if (!workspace.playerData || slots === 0) {
+    head.innerHTML = '';
+    body.innerHTML = '<tr><td class="px-3 py-4 text-center text-on-surface-variant/50 italic">尚未載入地圖，或這個存檔沒有角色參數</td></tr>';
+    return;
+  }
+  head.innerHTML = '<th class="px-2 py-2 font-medium whitespace-nowrap">欄位</th>'
+    + Array.from({ length: slots }, (_, i) => `<th class="px-1 py-2 font-medium text-center whitespace-nowrap">${playerName(i)}</th>`).join('');
+
+  body.innerHTML = '';
+  PLAYER_FIELDS.forEach((f, fi) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="px-2 py-1.5 text-on-surface-variant whitespace-nowrap" title="${f.hint}">${f.label}</td>`
+      + Array.from({ length: slots }, (_, slot) =>
+        `<td class="px-1 py-1"><input type="number" min="0" step="100" value="${getPlayerField(fi, slot)}"
+           data-pf="${fi}" data-ps="${slot}" title="${f.hint}"
+           class="input-unified w-full min-w-[62px] px-1 py-1 text-[11px] font-mono text-right"></td>`).join('');
+    body.appendChild(tr);
+  });
+
+  body.querySelectorAll('input').forEach(inp => {
+    const apply = (t: HTMLInputElement) => {
+      const fi = parseInt(t.dataset.pf || '0'), slot = parseInt(t.dataset.ps || '0');
+      // u32 上限；負數與空白一律當 0，不要讓 >>> 把它變成天文數字
+      const v = Math.max(0, Math.min(0xffffffff, Math.floor(Number(t.value) || 0)));
+      if (getPlayerField(fi, slot) === v) return;
+      mark(`改角色參數（${playerName(slot)}的${PLAYER_FIELDS[fi].label}）`);
+      setPlayerField(fi, slot, v);
+      if (String(v) !== t.value) t.value = String(v);
+      logMsg(`👤 ${playerName(slot)} 的「${PLAYER_FIELDS[fi].label}」改為 ${v}（存檔時寫回 DSK 第 1 組）。`);
+    };
+    inp.addEventListener('change', () => apply(inp));
+  });
+}
+
 // ==== 地價標準化 ====
 // 每個地段的「增值價 + 空地~五層過路費」都改成「該地段的土地價格 × 倍率」。
 // 土地價格本身不動 —— 那是設計者定的，倍率只負責把衍生欄位算齊。
@@ -1802,6 +1877,7 @@ function refreshAfterLoad(): void {
   for (const k of Object.keys(extraPriceData)) delete extraPriceData[Number(k)];
   renderer.redraw();
   renderPriceTable(0);
+  renderPlayerTable();   // 角色名稱來自 PAK 文字，換圖要重建
   runValidation();
 }
 let currentMapIndex = 0;

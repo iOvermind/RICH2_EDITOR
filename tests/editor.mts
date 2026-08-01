@@ -10,7 +10,24 @@ import {
   scanSpecials, specialKindOfTile, specialTilesOfKind, placeSpecial,
   scanSeaRoads, repairSeaRoads, SEA_ROAD_ID_MAX, deleteLocation,
 } from '../src/core/integrity.ts';
-import { LOC_FIELDS, LAND_TILES, MARKER_TILE } from '../src/config/constants.ts';
+import { LOC_FIELDS, LAND_TILES, MARKER_TILE, PLAYER_SLOTS, PLAYER_FIELD_COUNT } from '../src/config/constants.ts';
+import { parseSaveDskCore, rebuildDskBufferCore } from '../src/core/parser.ts';
+
+/** 讀某個 DSK 的角色參數，附上取值器與「這張圖有幾個角色」 */
+function loadDsk(base: string, dsk: string) {
+  const f = `${base}/${dsk}.dsk`;
+  if (!fs.existsSync(f)) return null;
+  const b = fs.readFileSync(f);
+  const raw = b.buffer.slice(b.byteOffset, b.byteOffset + b.length) as ArrayBuffer;
+  const r = parseSaveDskCore(new DataView(raw), () => { });
+  if (!r?.playerData) return null;
+  const pd = r.playerData;
+  const dv = new DataView(pd.buffer, pd.byteOffset, pd.byteLength);
+  const get = (field: number, slot: number) => dv.getUint32((field * PLAYER_SLOTS + slot) * 4, true);
+  let slots = 0;
+  for (let s = 0; s < PLAYER_SLOTS; s++) for (let f2 = 0; f2 < PLAYER_FIELD_COUNT; f2++) if (get(f2, s)) { slots = s + 1; break; }
+  return { raw, r, pd, get, slots };
+}
 
 let pass = 0, fail = 0, skipped = 0;
 function check(name: string, cond: boolean, extra = '') {
@@ -919,6 +936,50 @@ console.log('\n=== 8. 經過就觸發（Run.exe 0x1C5F，編輯器不得改動�
   if (!live) skip('現用 Run.exe 的判斷位元組', NO_LIVE);
   else eq('編輯器沒有動過這 9 個位元組（動了會當機）',
     [...live.subarray(PASS_OFFSET, PASS_OFFSET + 9)], ORIG);
+}
+
+// ==================== 9. 角色參數（DSK 第 1 組）====================
+// u32[欄位][角色]，欄位各自連續、每列 6 個角色 —— 跟地點資料同一套排法。
+// 欄位 0/1 是開局的現金與存款；2 起都是成對的 AI 門檻（錢多於上限必做、少於下限
+// 必不做、中間隨機）。角色名稱不在這一組，而是在該圖 PAK 文字表的第 1~6 行。
+console.log('\n=== 9. 角色參數 playerData ===');
+{
+  const m = R ? loadDsk(R, 'Save_7') : null;
+  if (!m) skip('角色參數', NO_ORIG);
+  else {
+    const { pd, get, slots } = m;
+    eq('台灣有 4 個角色（香港 5、大富翁城 6）', slots, 4);
+    eq('陣列大小 = 欄位數 × 6 × 4 bytes', pd.length >= PLAYER_FIELD_COUNT * PLAYER_SLOTS * 4, true);
+    eq('阿土仔的現金/存款是 25000', [get(0, 0), get(1, 0)], [25000, 25000]);
+    eq('大老千的現金/存款是 30000', [get(0, 1), get(1, 1)], [30000, 30000]);
+    // 門檻必須上限 > 下限，否則「中間隨機」那段不存在，AI 行為會退化
+    for (const [hi, lo, what] of [[2, 3, '購地'], [4, 5, '增建'], [6, 7, '買股'], [8, 9, '欄位8/9']] as const) {
+      const bad = [...Array(slots).keys()].filter(s => get(hi, s) <= get(lo, s));
+      check(`${what}門檻：每個角色都是上限 > 下限`, bad.length === 0, `角色 ${bad.join(',')} 不符`);
+    }
+    // 沒用到的角色欄位必須整組為 0 —— 有殘值代表解析錯位
+    const ghost = [...Array(PLAYER_SLOTS - slots).keys()]
+      .filter(i => [...Array(PLAYER_FIELD_COUNT).keys()].some(f => get(f, slots + i) !== 0));
+    eq('用不到的角色欄位全為 0', ghost.length, 0);
+
+    // 寫回：改一個值重建，其餘欄位與地點/價格組都不能被動到
+    const before = get(0, 0);
+    const dv = new DataView(pd.buffer, pd.byteOffset, pd.byteLength);
+    dv.setUint32(0, 99999, true);
+    const rebuilt = rebuildDskBufferCore(m.raw, m.r.dskGroupPointers, m.r.mapLayout!, m.r.locData, m.r.priceData, pd, () => { });
+    check('重建成功', !!rebuilt);
+    if (rebuilt) {
+      const back = parseSaveDskCore(new DataView(rebuilt), () => { })!;
+      const b2 = new DataView(back.playerData!.buffer, back.playerData!.byteOffset, back.playerData!.byteLength);
+      eq('改到的欄位有寫回', b2.getUint32(0, true), 99999);
+      const rest = [...Array(PLAYER_FIELD_COUNT * PLAYER_SLOTS - 1).keys()]
+        .every(i => b2.getUint32((i + 1) * 4, true) === dv.getUint32((i + 1) * 4, true));
+      check('其餘角色欄位一字不差', rest);
+      check('地點組沒被動到', Buffer.from(back.locData!).equals(Buffer.from(m.r.locData!)));
+      check('價格組沒被動到', Buffer.from(back.priceData!).equals(Buffer.from(m.r.priceData!)));
+    }
+    dv.setUint32(0, before, true);
+  }
 }
 
 console.log(`\n${'='.repeat(50)}\n通過 ${pass}　失敗 ${fail}` + (skipped ? `　略過 ${skipped}` : ''));

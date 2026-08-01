@@ -2,6 +2,7 @@
 import iconv from 'iconv-lite';
 import { Buffer } from 'buffer';
 import { decompressGeneralData, compressGeneralData } from '../utils/compression';
+import { PLAYER_FIELD_COUNT, PLAYER_SLOTS } from '../config/constants';
 
 export interface PakParsedResult {
     pakGroupPointers: number[];
@@ -165,6 +166,8 @@ export interface DskParsedResult {
     mapLayout: Uint16Array | null;
     locData: Uint8Array | null;
     priceData: Uint8Array | null;
+    /** 第 1 組：角色參數，`u32[欄位][角色]`，每列 6 個角色（見 PLAYER_FIELDS） */
+    playerData: Uint8Array | null;
 }
 
 /**
@@ -206,6 +209,14 @@ export function parseSaveDskCore(dataView: DataView, logMsg: (msg: string) => vo
         return null;
     }
 
+    // 第 1 組：角色參數（現金／存款／AI 門檻）。認不出來就當沒有，不要擋住載入。
+    let playerData: Uint8Array | null = null;
+    try {
+        const g0 = decompressGeneralData(dataView, groupPointers[0]);
+        if (g0.length >= PLAYER_FIELD_COUNT * PLAYER_SLOTS * 4) playerData = g0;
+        else logMsg(`⚠ 第 1 組只有 ${g0.length} bytes，不像角色參數，略過。`);
+    } catch { logMsg('⚠ 第 1 組解壓失敗，角色參數不可編輯。'); }
+
     logMsg("正在解壓第 6 組：地圖排版陣列...");
     const layoutData = decompressGeneralData(dataView, groupPointers[5]);
     let mapLayout: Uint16Array | null = null;
@@ -243,7 +254,7 @@ export function parseSaveDskCore(dataView: DataView, logMsg: (msg: string) => vo
         }
     }
 
-    return { dskGroupPointers: groupPointers, mapLayout, locData, priceData };
+    return { dskGroupPointers: groupPointers, mapLayout, locData, priceData, playerData };
 }
 
 /**
@@ -255,6 +266,7 @@ export function rebuildDskBufferCore(
     mapLayout: Uint16Array,
     locData: Uint8Array | null,
     priceData: Uint8Array | null,
+    playerData: Uint8Array | null,
     logMsg: (msg: string) => void
 ): ArrayBuffer | null {
 
@@ -273,20 +285,15 @@ export function rebuildDskBufferCore(
     }
 
     if (priceData) {
-        const dv_check = new DataView(priceData.buffer, priceData.byteOffset, priceData.byteLength);
-        console.log('匯出前 seg19 各欄位:',
-            Array.from({ length: 8 }, (_, fi) => dv_check.getUint16(fi * 90 + 19 * 2, true))
-        );
         const r = replaceGroupInDsk(curBytes, curPtrs, 7, priceData);
         curBytes = r.bytes; curPtrs = r.ptrs;
-
-        const verify = decompressGeneralData(new DataView(r.bytes.buffer), r.ptrs[7]);
-        const dv_verify = new DataView(verify.buffer, verify.byteOffset, verify.byteLength);
-        console.log('壓縮後解壓驗證 seg19:',
-            Array.from({ length: 8 }, (_, fi) => dv_verify.getUint16(fi * 90 + 19 * 2, true))
-        );
-
         logMsg("價格表已重新壓縮。");
+    }
+
+    if (playerData) {
+        const r = replaceGroupInDsk(curBytes, curPtrs, 0, playerData);
+        curBytes = r.bytes; curPtrs = r.ptrs;
+        logMsg("角色參數已重新壓縮。");
     }
 
     const layoutBytes = new Uint8Array(1296 * 2);

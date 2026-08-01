@@ -25,6 +25,8 @@ export class Workspace {
     
     public priceData: Uint8Array | null = null;
     public locData: Uint8Array | null = null;
+    /** 角色參數（DSK 第 1 組）：現金／存款／AI 門檻 */
+    public playerData: Uint8Array | null = null;
     
     // 文字資料
     public pakTextLines: string[] = [];
@@ -79,6 +81,10 @@ export class Workspace {
 
         if (result.locData) {
             this.locData = result.locData;
+        }
+
+        if (result.playerData) {
+            this.playerData = result.playerData;
         }
 
         if (result.priceData) {

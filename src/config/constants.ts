@@ -96,3 +96,24 @@ export const LOC_FIELDS = {
 // ⚠ UNKD / UNK10~13：實測 rich2 的 9 個 DSK（三張原版圖 + 6 個存檔槽）全部 283 個記錄槽
 // 皆為 0，確定是保留欄位。編輯器 UI 已移除這五個欄位，但**偏移量必須留著** ——
 // isActive()/renameLocation() 會走訪 Object.values(LOC_FIELDS)，而且這裡也是檔案格式的文件。
+// ==== 角色參數（SAVE_?.DSK 的第 1 組）====
+// 排法跟地點資料同一套：`u32[欄位][角色]`，欄位各自連續，每列 6 個角色。
+// 每張圖用到的角色數不同（台灣 4、香港 5、大富翁城 6），沒用到的那幾欄是 0；
+// 角色名稱在該圖 PAK 文字表的第 1~6 行。
+//
+// 欄位 2 起都是**成對的 AI 門檻**：手上的錢大於上限就一定做、小於下限就一定不做、
+// 夾在中間則是隨機。所以調這幾個數字等於在調每個角色的性格。
+export const PLAYER_SLOTS: number = 6;
+export const PLAYER_FIELD_COUNT: number = 10;
+export const PLAYER_FIELDS: { label: string; hint: string }[] = [
+    { label: '現金', hint: '開局時手上的錢' },
+    { label: '存款', hint: '開局時銀行裡的錢' },
+    { label: '購地 上限', hint: '錢多於這個數就一定買地' },
+    { label: '購地 下限', hint: '錢少於這個數就一定不買地（中間隨機）' },
+    { label: '增建 上限', hint: '錢多於這個數就一定蓋房子' },
+    { label: '增建 下限', hint: '錢少於這個數就一定不蓋（中間隨機）' },
+    { label: '買股 上限', hint: '錢多於這個數就一定買股票' },
+    { label: '買股 下限', hint: '錢少於這個數就一定不買（中間隨機）' },
+    { label: '欄位8 上限', hint: '用途未確認，數值形態與其他門檻相同' },
+    { label: '欄位9 下限', hint: '用途未確認，數值形態與其他門檻相同' },
+];

@@ -91,6 +91,9 @@
           class="tab-btn"
           data-tab="tabPrice">💰 價格</button>
         <button
+          class="tab-btn"
+          data-tab="tabPlayer">👤 角色</button>
+        <button
           class="tab-btn flex items-center justify-center gap-1"
           data-tab="tabWarn">
           ⚠️ 警告
@@ -277,6 +280,25 @@
               <tbody id="priceTbody" class="divide-y divide-outline-variant/10">
                 <!-- JS 動態產生 -->
               </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 角色頁：DSK 第 1 組，u32[欄位][角色] -->
+        <div id="tabPlayer" class="tab-pane space-y-3">
+          <div class="text-[10px] text-on-surface-variant/70 leading-relaxed">
+            每張圖自己一組角色（台灣 4、香港 5、大富翁城 6）。
+            <b class="text-primary">現金／存款</b>是開局時的錢；
+            其餘成對的欄位是 <b class="text-primary">AI 門檻</b> ——
+            手上的錢多於上限就一定做、少於下限就一定不做、夾在中間則是隨機。
+            調這幾個數字等於在調每個角色的性格。
+          </div>
+          <div id="playerWrap" class="bg-surface-container-lowest rounded-md overflow-x-auto border border-outline-variant/10">
+            <table id="playerTable" class="w-full text-left text-xs">
+              <thead class="bg-surface-container-high text-on-surface-variant">
+                <tr id="playerHead"></tr>
+              </thead>
+              <tbody id="playerTbody" class="divide-y divide-outline-variant/10"></tbody>
             </table>
           </div>
         </div>
