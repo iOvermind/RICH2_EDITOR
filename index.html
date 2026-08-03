@@ -79,25 +79,18 @@
         </p>
       </div>
 
-      <!-- Tabs (保留原 data-tab 屬性) -->
+      <!-- Tabs（頁籤放不下時左右捲，不要把面板撐寬）-->
       <div class="tab-bar">
-        <button
-          class="tab-btn"
-          data-tab="tabTile">🧱 圖塊</button>
-        <button
-          class="tab-btn active"
-          data-tab="tabLoc">📍 地點</button>
-        <button
-          class="tab-btn"
-          data-tab="tabPrice">💰 價格</button>
-        <button
-          class="tab-btn"
-          data-tab="tabPlayer">👤 角色</button>
-        <button
-          class="tab-btn flex items-center justify-center gap-1"
-          data-tab="tabWarn">
-          ⚠️ 警告
-        </button>
+        <button id="tabScrollL" class="tab-scroll" aria-label="往左捲頁籤">‹</button>
+        <div class="tab-strip" id="tabStrip">
+          <button class="tab-btn" data-tab="tabTile">🧱 圖塊</button>
+          <button class="tab-btn active" data-tab="tabLoc">📍 地點</button>
+          <button class="tab-btn" data-tab="tabPrice">💰 價格</button>
+          <button class="tab-btn" data-tab="tabPlayer">👤 角色</button>
+          <button class="tab-btn" data-tab="tabEngine">⚙️ 引擎</button>
+          <button class="tab-btn" data-tab="tabWarn">⚠️ 警告</button>
+        </div>
+        <button id="tabScrollR" class="tab-scroll" aria-label="往右捲頁籤">›</button>
       </div>
 
       <!-- Scrollable Content Area -->
@@ -301,6 +294,20 @@
               <tbody id="playerTbody" class="divide-y divide-outline-variant/10"></tbody>
             </table>
           </div>
+        </div>
+
+        <!-- 引擎頁：全域設定，三張圖共用同一個 Run.exe -->
+        <div id="tabEngine" class="tab-pane space-y-4">
+          <div>
+            <h3 class="text-xs font-semibold uppercase tracking-widest text-on-surface-variant/70 mb-1">經過就觸發</h3>
+            <p class="text-[11px] leading-relaxed text-on-surface-variant/70">
+              勾選的種類，玩家<strong>經過</strong>時會停下來跑完整功能，再走完剩下的步數。<br>
+              這會改寫 <code>Run.exe</code>（換成未壓縮版，188KB → 216KB）。
+              取消全部勾選就會還原成原版行為。
+            </p>
+          </div>
+          <div id="passKindList" class="space-y-1"></div>
+          <p id="passStatus" class="text-[11px] text-on-surface-variant/60"></p>
         </div>
 
         <!-- 警告頁 -->

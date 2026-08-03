@@ -85,16 +85,44 @@ input[type="number"]::-webkit-outer-spin-button {
    ========================================= */
 .tab-bar {
   display: flex;
+  align-items: flex-end;
   background-color: #252526;
   border-bottom: 1px solid #444;
   padding-top: 6px;
-  padding-left: 6px;
+  padding-left: 2px;
 }
 
-.tab-btn {
+/* 頁籤帶：放不下就橫向捲，而不是把整個面板撐寬。捲軸藏起來，改用兩側的箭頭。 */
+.tab-strip {
+  display: flex;
   flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+.tab-strip::-webkit-scrollbar { display: none; }
+
+.tab-scroll {
+  flex: none;
+  width: 18px;
+  align-self: stretch;
+  background: transparent;
+  border: none;
+  color: #888;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+.tab-scroll:hover { color: #e5e2e1; }
+.tab-scroll:disabled { opacity: 0.25; cursor: default; }
+
+.tab-btn {
+  flex: none;
+  white-space: nowrap;
   text-align: center;
-  padding: 6px 0;
+  padding: 6px 10px;
   background-color: #2d2d2d;
   color: #888;
   border: 1px solid #444;

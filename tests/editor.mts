@@ -12,6 +12,10 @@ import {
 } from '../src/core/integrity.ts';
 import { LOC_FIELDS, LAND_TILES, MARKER_TILE, PLAYER_SLOTS, PLAYER_FIELD_COUNT } from '../src/config/constants.ts';
 import { parseSaveDskCore, rebuildDskBufferCore } from '../src/core/parser.ts';
+import { loadExe, buildExe, readCap, writeCap, imageOffset, writeInsertList, MAP_CAPS } from '../src/core/exe.ts';
+import { insertPassThrough, defaultTable, readPassTable, TABLE_LEN } from '../src/core/passthrough.ts';
+import { insertBlock, segmentEnds } from '../src/core/codecave.ts';
+import { insertPriceIndex } from '../src/core/priceindex.ts';
 
 /** 讀某個 DSK 的角色參數，附上取值器與「這張圖有幾個角色」 */
 function loadDsk(base: string, dsk: string) {
@@ -876,66 +880,79 @@ console.log('\n=== 6c. 刪除地點 deleteLocation ===');
 }
 
 // ==================== 7. exe patch 狀態 ====================
+// 現用的 Run.exe 可能是原版（EXEPACK 壓縮）或編輯器輸出的未壓縮版，兩種版面的
+// 檔案 offset 不一樣，所以一律透過 loadExe 走**映像 offset**。
 console.log('\n=== 7. Run.exe patch 狀態 ===');
 {
   const cur = readIfExists(LIVE && `${LIVE}/Run.exe`);
   const bak = readIfExists(LIVE && `${LIVE}/Run.exe.bak`);
   if (!cur || !bak) skip('Run.exe patch 狀態', cur ? '找不到 Run.exe.bak（還沒 patch 過）' : NO_LIVE);
   else {
-  // maxLocId 只要 ≥ 該圖實際用到的最大編號即可（不必一律 282；開太大會讓引擎把空記錄也當合法地點）
-  for (const [name, off, dsk, pak, live] of [
-    ['台灣', 0x124aa, 'Save_7', 'Part1', true],
-    ['香港', 0x124c4, 'Save_8', 'Part2', false],
-    ['大富翁城', 0x124de, 'Save_9', 'Part3', false],
-  ] as const) {
-    const m = loadMap(live ? LIVE : R, dsk, pak);
-    if (!m) { skip(`${name} maxLocId`, live ? NO_LIVE : NO_ORIG); continue; }
-    const { grid } = m;
-    let maxUsed = 0;
-    for (const v of grid) if (v > 0 && v <= MAX_LOC_ID && v > maxUsed) maxUsed = v;
-    const val = cur.readUInt16LE(off);
-    check(`${name} maxLocId(${val}) ≥ 實際最大編號(${maxUsed})`, val >= maxUsed, `不足`);
-    check(`${name} maxLocId 不超過陣列上限 282`, val <= 282, `val=${val}`);
-  }
-  const diff: number[] = [];
-  for (let i = 0; i < Math.min(cur.length, bak.length); i++) if (cur[i] !== bak[i]) diff.push(i);
-  const allowed = new Set([0x124aa, 0x124ab, 0x124c4, 0x124c5, 0x124de, 0x124df,
-                           0x124b0, 0x124b1, 0x124ca, 0x124cb, 0x124e4, 0x124e5]);
-  // 真正要守住的是「編輯器只改容量設定，沒有寫壞旁邊的程式碼」——所以只管
-  // 每張圖的初始化區段 0x1249e~0x124ec。這個範圍外的位元組**不是編輯器寫的**：
-  // 遊戲自己會把音效卡/搖桿設定寫回 Run.exe（實測 0xbfe、0xc49e、0xc4a2 三個位元組
-  // 在玩過之後就變了，而 patchExe 只 setUint16 那六個 offset）。那種差異只回報、不當失敗。
-  const INIT_LO = 0x1249e, INIT_HI = 0x124ec;
-  const inInit = diff.filter(o => o >= INIT_LO && o <= INIT_HI);
-  const outside = diff.filter(o => o < INIT_LO || o > INIT_HI);
-  check('容量設定區段只動到 maxLocId / 特殊數（沒碰玩家數或旁邊的程式碼）',
-    inInit.every(o => allowed.has(o)), `差異位置 ${inInit.map(o => '0x' + o.toString(16)).join(',')}`);
-  if (outside.length > 0) {
-    console.log(`  ℹ 區段外還有 ${outside.length} 個位元組與備份不同：${outside.map(o => '0x' + o.toString(16)).join(',')}` +
-      `　—— 編輯器不會寫那裡，多半是遊戲自己存回去的設定（音效卡/搖桿）。`);
-  }
-  eq('檔案大小未變（EXEPACK 固定長度）', cur.length, bak.length);
+    const now = loadExe(new Uint8Array(cur));
+    const orig = loadExe(new Uint8Array(bak));
+
+    // maxLocId 只要 ≥ 該圖實際用到的最大編號即可（不必一律 282；
+    // 開太大會讓引擎把中間那一大段空記錄也當成合法地點）
+    for (const [i, name, dsk, pak, live] of [
+      [0, '台灣', 'Save_7', 'Part1', true],
+      [1, '香港', 'Save_8', 'Part2', false],
+      [2, '大富翁城', 'Save_9', 'Part3', false],
+    ] as const) {
+      const m = loadMap(live ? LIVE : R, dsk, pak);
+      if (!m) { skip(`${name} maxLocId`, live ? NO_LIVE : NO_ORIG); continue; }
+      let maxUsed = 0;
+      for (const v of m.grid) if (v > 0 && v <= MAX_LOC_ID && v > maxUsed) maxUsed = v;
+      const val = readCap(now, i, 'maxLoc');
+      check(`${name} maxLocId(${val}) ≥ 實際最大編號(${maxUsed})`, val >= maxUsed, '不足');
+      check(`${name} maxLocId 不超過陣列上限 282`, val <= 282, `val=${val}`);
+    }
+
+    // 真正要守住的是「編輯器只改容量、只插跳板，沒有寫壞別的程式碼」。
+    // 把跳板插入造成的位移還原之後，兩份映像應該只差那六個容量立即數。
+    const shift = (now.inserts ?? []).reduce((n, i) => n + i.bytes, 0);
+    const at = now.inserts?.[0]?.atOriginal ?? Infinity;
+    const allowed = new Set<number>();
+    for (const c of MAP_CAPS) { allowed.add(c.maxLoc); allowed.add(c.maxLoc + 1); allowed.add(c.special); allowed.add(c.special + 1); }
+    // 六個掛鉤點被換成 near jmp（原指令 3~9 bytes），也是預期內的差異
+    for (const [site, len] of [[0x0cfe, 3], [0x17b6, 6], [0x1a5f, 9], [0x1c0f, 3], [0x1d2e, 3], [0x29ff, 3]] as const) {
+      for (let i = 0; i < len; i++) allowed.add(site + i);
+    }
+    const diff: number[] = [];
+    for (let o = 0; o < orig.image.length; o++) {
+      const n = o >= at ? o + shift : o;
+      if (now.image[n] !== orig.image[o]) diff.push(o);
+    }
+    // 插跳板會讓後面每個段往上移，重定位項存的段值跟著 +段落數——那是預期內的
+    const relocAddrs = new Set<number>();
+    for (const r of orig.relocs) { relocAddrs.add(r.seg * 16 + r.off); relocAddrs.add(r.seg * 16 + r.off + 1); }
+    const unexplained = diff.filter(o => !allowed.has(o) && !relocAddrs.has(o) && o < at);
+    check('除了容量與跳板，映像沒有被動到別的地方', unexplained.length === 0,
+      `未解釋的差異 ${unexplained.length} 處：${unexplained.slice(0, 8).map(o => '0x' + o.toString(16)).join(',')}`);
+    check('映像長度只因為跳板與配額補 0 而變長',
+      now.image.length >= orig.image.length + shift);
   }
 }
 
-// ==================== 8. 經過就觸發（已查明，刻意不改）====================
-// 移動途中每經過一格，引擎會在檔案 0x1C5F 判斷 `cmp word ptr es:[bx], 1`，
-// es:[bx] 是該地點的 SPECIAL 欄位。但那個 1 **不是「哪種特殊地點經過會觸發」的開關** ——
-// 條件成立後走到的 0x1A68 是銀行專屬的過路處理，不是通用分派器。
-// 放寬成區間實測過：其他種類會跑進銀行流程，整個遊戲配色跑掉、角色移動出界。
-// 所以編輯器不碰這 9 個位元組，這裡當回歸防線守住。
-console.log('\n=== 8. 經過就觸發（Run.exe 0x1C5F，編輯器不得改動）===');
+// ==================== 8. 經過就觸發：掛鉤點的原始位元組 ====================
+// 這一節守的是「原版長什麼樣」，不是「編輯器不准動」——現在編輯器**會**動這些位置
+// （插跳板，見 src/core/passthrough.ts 與第 10 節）。原版的位元組必須維持原樣，
+// 因為 insertPassThrough 靠它們確認「這份 Run.exe 是我認得的版本」，對不上就拒絕插碼。
+console.log('\n=== 8. 經過就觸發：掛鉤點的原始位元組 ===');
 {
-  const PASS_OFFSET = 0x1c5f;
-  const ORIG = [0x26, 0x83, 0x3f, 0x01, 0x74, 0x03, 0xe9, 0x69, 0x00];
+  // 檔案 offset = 映像 offset + 0x200（只在 EXEPACK 的原樣保留區成立）
+  const SITES: [string, number, number[]][] = [
+    ['0x1A5F cmp word es:[bx],1 / je / jmp', 0x1a5f, [0x26, 0x83, 0x3f, 0x01, 0x74, 0x03, 0xe9, 0x69, 0x00]],
+    ['0x17B6 mov [0x19c],2（擲骰）', 0x17b6, [0xc7, 0x06, 0x9c, 0x01, 0x02, 0x00]],
+    ['0x29FF push 0x10f8（落地匯流點）', 0x29ff, [0x68, 0xf8, 0x10]],
+    ['0x0CFE push 0x10f8（畫靜止角色）', 0x0cfe, [0x68, 0xf8, 0x10]],
+    ['0x1C0F push 0x10f8（畫靜止角色）', 0x1c0f, [0x68, 0xf8, 0x10]],
+    ['0x1D2E push 0x10f8（畫靜止角色）', 0x1d2e, [0x68, 0xf8, 0x10]],
+  ];
   const orig = readIfExists(R && `${R}/Run.exe`);
-  const live = readIfExists(LIVE && `${LIVE}/Run.exe`);
-  if (!orig) skip('原版 Run.exe 的判斷位元組', NO_ORIG);
-  else eq('原版 Run.exe @0x1C5F 是 cmp word es:[bx],1 / je / jmp',
-    [...orig.subarray(PASS_OFFSET, PASS_OFFSET + 9)], ORIG);
-  if (!live) skip('現用 Run.exe 的判斷位元組', NO_LIVE);
-  else eq('編輯器沒有動過這 9 個位元組（動了會當機）',
-    [...live.subarray(PASS_OFFSET, PASS_OFFSET + 9)], ORIG);
+  if (!orig) skip('原版 Run.exe 的掛鉤點', NO_ORIG);
+  else for (const [name, img, want] of SITES) {
+    eq(name, [...orig.subarray(img + 0x200, img + 0x200 + want.length)], want);
+  }
 }
 
 // ==================== 9. 角色參數（DSK 第 1 組）====================
@@ -979,6 +996,218 @@ console.log('\n=== 9. 角色參數 playerData ===');
       check('價格組沒被動到', Buffer.from(back.priceData!).equals(Buffer.from(m.r.priceData!)));
     }
     dv.setUint32(0, before, true);
+  }
+}
+
+
+// ==================== 10. Run.exe：解壓、容量、跳板 ====================
+// 原版是 EXEPACK 壓縮的，編輯器輸出的是未壓縮 MZ。所有 offset 一律用**映像 offset**，
+// 因為兩種版面的檔頭大小不同，而且插跳板還會讓插入點之後的東西整批位移。
+console.log('\n=== 10. Run.exe 映像 ===');
+{
+  const exePath = R ? `${R}/Run.exe` : null;
+  if (!exePath || !fs.existsSync(exePath)) { skipped++; console.log('  (略過：找不到原版 Run.exe)'); }
+  else {
+    const raw = new Uint8Array(fs.readFileSync(exePath));
+    const x = loadExe(raw);
+    check('原版認得出是 EXEPACK 壓縮', x.wasPacked);
+    check('映像長度 205648 bytes', x.image.length === 205648);
+    check('重定位項 2502 個', x.relocs.length === 2502);
+    check('重定位項全部落在映像內', x.relocs.every(r => r.seg * 16 + r.off + 2 <= x.image.length));
+
+    const caps = MAP_CAPS.map((_, i) => [readCap(x, i, 'maxLoc'), readCap(x, i, 'special')]);
+    check('原版容量 台灣119/23 香港140/27 大富翁城282/40',
+      JSON.stringify(caps) === JSON.stringify([[119, 23], [140, 27], [282, 40]]));
+
+    // 未壓縮版：編輯器存過檔之後使用者的 Run.exe 就是這種，要讀得回來
+    const y = loadExe(buildExe(x));
+    check('輸出的未壓縮版讀得回來', !y.wasPacked);
+    // 輸出會把 DOS 配額之內、映像之外那塊也寫進檔案並填 0（見 buildExe 的註解），
+    // 所以往返後的映像會比原本長；前段必須逐位元組相同，多出來的必須全是 0。
+    check('往返後映像前段逐位元組相同',
+      y.image.length >= x.image.length && x.image.every((v, i) => v === y.image[i]));
+    check('多出來的配額區全是 0',
+      y.image.subarray(x.image.length).every(v => v === 0));
+    check('配額總量與壓縮版相同',
+      y.image.length / 16 === Math.ceil(x.image.length / 16) + x.minAlloc && y.minAlloc === 0);
+    check('往返後重定位表相同', y.relocs.length === x.relocs.length
+      && y.relocs.every((r, i) => r.seg === x.relocs[i].seg && r.off === x.relocs[i].off));
+    check('往返後 CS/SS/IP/SP 相同', y.cs === x.cs && y.ss === x.ss && y.ip === x.ip && y.sp === x.sp);
+
+    const z = loadExe(raw);
+    writeCap(z, 0, 'maxLoc', 200);
+    check('改寫容量讀得回來', readCap(z, 0, 'maxLoc') === 200);
+    // 只准動到那個立即數的兩個位元組（200 的高位元組本來就是 0，所以實際只會差 1 個）
+    const changed: number[] = [];
+    for (let i = 0; i < x.image.length; i++) if (z.image[i] !== x.image[i]) changed.push(i);
+    check('改容量只動到那個立即數',
+      changed.every(i => i === MAP_CAPS[0].maxLoc || i === MAP_CAPS[0].maxLoc + 1), `動到 ${changed.length} 處`);
+
+    const t = defaultTable(); t[3] = 1;
+    insertPassThrough(z, t);
+    const shift = z.inserts!.reduce((n, i) => n + i.bytes, 0);
+    check('插跳板後有留下簽章，讀得回插入清單', (z.inserts?.length ?? 0) === 1 && shift > 0);
+    check('映像剛好長了跳板那麼多', z.image.length === x.image.length + shift);
+    check('插跳板後容量仍讀得到（offset 自動位移）', readCap(z, 0, 'maxLoc') === 200);
+    check('CS/SS 跟著往上位移同樣的段落數', z.cs === x.cs + shift / 16 && z.ss === x.ss + shift / 16);
+    check('重定位項沒有增減', z.relocs.length === x.relocs.length);
+
+    const hooks = [0x0cfe, 0x17b6, 0x1a5f, 0x1c0f, 0x1d2e, 0x29ff];
+    check('六個掛鉤點都是 near jmp', hooks.every(h => z.image[h] === 0xe9));
+    check('掛鉤點的跳轉目標都落在跳板內', hooks.every(h => {
+      const rel = z.image[h + 1] | (z.image[h + 2] << 8);
+      return ((h + 3 + (rel > 0x7fff ? rel - 0x10000 : rel)) & 0xffff) - z.inserts![0].atOriginal < shift;
+    }));
+    check('跳板裡的表寫對了（銀行=2、卡片=1）',
+      z.image[z.inserts![0].atOriginal + 0x130 + 1] === 2 && z.image[z.inserts![0].atOriginal + 0x130 + 3] === 1);
+    check('表的最後一項也寫得進去（不會溢位被靜靜吃掉）', (() => {
+      const w = loadExe(raw); const full = defaultTable(); full[TABLE_LEN - 1] = 1;
+      insertPassThrough(w, full);
+      return w.image[w.inserts![0].atOriginal + 0x130 + TABLE_LEN - 1] === 1;
+    })());
+    check('讀得回自己寫進去的設定', (() => {
+      const back = readPassTable(loadExe(buildExe(z)));
+      return back.every((v, k) => v === (k === 1 ? 2 : k === 3 ? 1 : 0));
+    })());
+    check('預設表就是原版行為（只有銀行=2）', defaultTable().every((v, k) => v === (k === 1 ? 2 : 0)));
+
+    const bad = loadExe(raw);
+    bad.image[0x1a5f] = 0x90;
+    let threw = false;
+    try { insertPassThrough(bad, t); } catch { threw = true; }
+    check('掛鉤點被動過就拒絕插碼', threw);
+  }
+}
+
+
+// ==================== 11. 插碼機制：連續插入多塊 ====================
+// 「經過就觸發」的跳板插在段 0 尾端（0x0CC50），物價指數的跳板要插在段 0xCC5 尾端
+// （0x1C6A0，過路費的讀取點 0x12695 在那個段裡，near 跳轉才搆得到）。
+// 兩塊都插的時候，位移會疊加——這一節守住「原版映像 offset → 實際位置」的換算。
+console.log('\n=== 11. 插碼：連續插入多塊 ===');
+{
+  const exePath = R ? `${R}/Run.exe` : null;
+  if (!exePath || !fs.existsSync(exePath)) { skipped++; console.log('  (略過：找不到原版 Run.exe)'); }
+  else {
+    const raw = new Uint8Array(fs.readFileSync(exePath));
+    const base = loadExe(raw);
+
+    // 兩個段界：段 0 尾端、段 0xCC5 尾端
+    const b1 = segmentEnds(base)[0], b2 = segmentEnds(base)[1];
+    check('段界依序是 0x0CC5 與 0x1C6A', b1 === 0x0cc5 && b2 === 0x1c6a, `得到 0x${b1.toString(16)} / 0x${b2.toString(16)}`);
+
+    const x = loadExe(raw);
+    const A = new Uint8Array(0x40).fill(0xaa);   // 4 段落
+    const B = new Uint8Array(0x20).fill(0xbb);   // 2 段落
+    insertBlock(x, b1, A);
+    insertBlock(x, b2, B);
+
+    check('映像長度 = 原長 + 兩塊', x.image.length === base.image.length + A.length + B.length);
+    check('第一塊落在段界 0x0CC50', x.image[b1 * 16] === 0xaa && x.image[b1 * 16 + 0x3f] === 0xaa);
+    check('第二塊落在位移後的位置', x.image[b2 * 16 + A.length] === 0xbb);
+
+    // 換算：插入點之前不動、兩點之間位移第一塊、之後位移兩塊
+    check('offset 換算：插入點之前不變', imageOffset(x, 0x1a5f) === 0x1a5f);
+    check('offset 換算：兩點之間 +第一塊', imageOffset(x, 0x12695) === 0x12695 + A.length);
+    check('offset 換算：兩點之間也是 +第一塊', imageOffset(x, 0x122aa) === 0x122aa + A.length);
+    check('offset 換算：兩點之後 +兩塊', imageOffset(x, 0x2fa60) === 0x2fa60 + A.length + B.length);
+
+    // 原本的資料要能對得起來。重定位項存的段值會被 +段落數（那正是插入該做的事），
+    // 所以比對時要把那些位址排除掉。
+    const relocByte = new Set<number>();
+    for (const r of base.relocs) { const a = r.seg * 16 + r.off; relocByte.add(a); relocByte.add(a + 1); }
+    const same = (from: number, len: number, shift: number) => [...Array(len).keys()]
+      .every(i => relocByte.has(from + i) || x.image[from + i + shift] === base.image[from + i]);
+    check('插入點之前的位元組沒動', same(0x1a00, 0x400, 0));
+    check('兩點之間的位元組整批位移一塊', same(0x12600, 0x400, A.length));
+    check('兩點之後的位元組整批位移兩塊', same(0x2fa60, 0x400, A.length + B.length));
+
+    check('CS/SS 各往上兩塊的段落數', x.cs === base.cs + (A.length + B.length) / 16
+      && x.ss === base.ss + (A.length + B.length) / 16);
+    check('重定位項沒有增減', x.relocs.length === base.relocs.length);
+
+    // 每個重定位項存的段值，換算回來要跟原本指到同一個地方
+    const bad = base.relocs.filter((r, i) => {
+      const oldLin = r.seg * 16 + r.off, newLin = x.relocs[i].seg * 16 + x.relocs[i].off;
+      if (newLin !== imageOffset(x, oldLin)) return true;
+      const ov = base.image[oldLin] | (base.image[oldLin + 1] << 8);
+      const nv = x.image[newLin] | (x.image[newLin + 1] << 8);
+      return nv !== (ov >= b1 ? ov + (ov >= b2 ? (A.length + B.length) / 16 : A.length / 16) : ov);
+    });
+    check('每個重定位項都指向位移後的正確位置', bad.length === 0, `${bad.length} 項不對`);
+
+    // 容量欄位透過 readCap 仍然讀得到（它會自己換算）
+    check('容量在插兩塊之後仍讀得對',
+      readCap(x, 0, 'maxLoc') === readCap(base, 0, 'maxLoc'));
+
+    // 寫出去再讀回來，換算資訊要能還原（清單由 insertPassThrough 負責寫，這裡手動補上）
+    writeInsertList(x, x.inserts![0].atOriginal);
+    // 但裸插入沒有 0x1A5F 的掛鉤點，loadExe 找不到第一塊——這條由第 10 節的真實路徑守著
+    check('插入清單寫得進去', x.image[x.inserts![0].atOriginal + 0x160] === 0x52);
+  }
+}
+
+
+// ==================== 12. 物價指數 ====================
+// 所有玩家的總資產每超過一個門檻，過路費 +1 倍（等差、只漲不落）。
+// 掛在 0x12695——引擎讀過路費**全映像唯一的一處**，收租與 AI 估值共用它。
+console.log('\n=== 12. 物價指數 ===');
+{
+  const exePath = R ? `${R}/Run.exe` : null;
+  if (!exePath || !fs.existsSync(exePath)) { skipped++; console.log('  (略過：找不到原版 Run.exe)'); }
+  else {
+    const raw = new Uint8Array(fs.readFileSync(exePath));
+    const mk = (opt: Parameters<typeof insertPriceIndex>[1]) => {
+      const x = loadExe(raw);
+      insertPassThrough(x, defaultTable());     // 物價指數一定跟在它後面
+      insertPriceIndex(x, opt);
+      return x;
+    };
+
+    const x = mk({ thresholdK: 500, cap: 0 });
+    check('插了兩塊（經過就觸發 + 物價指數）', x.inserts?.length === 2);
+    check('第二塊插在段 0xCC5 的尾端', x.inserts![1].atOriginal === 0x1c6a0);
+
+    // 掛鉤點：原本是 mov ax,es:[bx] + cdq，換成 near jmp + nop
+    const hook = imageOffset(x, 0x12695);
+    check('掛鉤點換成 near jmp', x.image[hook] === 0xe9 && x.image[hook + 3] === 0x90);
+    const rel = x.image[hook + 1] | (x.image[hook + 2] << 8);
+    const target = (hook + 3 + (rel > 0x7fff ? rel - 0x10000 : rel)) & 0xffff;
+    const cave = imageOffset(x, 0x1c6a0) - x.inserts![1].bytes;   // 跳板落在插入點本身
+    check('跳轉目標就是跳板', target === (cave & 0xffff));
+
+    // 跳板開頭必須是「讀過路費 → 算 → 乘」
+    check('跳板開頭是 mov ax,es:[bx]',
+      x.image[cave] === 0x26 && x.image[cave + 1] === 0x8b && x.image[cave + 2] === 0x07);
+
+    // 變數：指數起始 1、門檻與上限照設定寫入
+    const rd = (o: number) => x.image[cave + o] | (x.image[cave + o + 1] << 8);
+    check('指數起始 = 1（還沒算之前不改變過路費）', rd(0xe0) === 1);
+    check('門檻寫進去了', rd(0xe2) === 500);
+    check('上限 0 = 無上限', rd(0xe4) === 0);
+    const y = mk({ thresholdK: 300, cap: 8 });
+    const cy = imageOffset(y, 0x1c6a0) - y.inserts![1].bytes;
+    check('門檻與上限都吃得到設定',
+      (y.image[cy + 0xe2] | (y.image[cy + 0xe3] << 8)) === 300
+      && (y.image[cy + 0xe4] | (y.image[cy + 0xe5] << 8)) === 8);
+
+    // 診斷模式：指數寫死，跳板裡不會有資產計算（用來把兩個變因切開）
+    const z = mk({ thresholdK: 0, cap: 0, fixedIndex: 2 });
+    const cz = imageOffset(z, 0x1c6a0) - z.inserts![1].bytes;
+    check('fixedIndex 直接寫進指數', (z.image[cz + 0xe0] | (z.image[cz + 0xe1] << 8)) === 2);
+    check('fixedIndex 模式沒有 call（跳板裡沒有資產計算）',
+      !z.image.subarray(cz, cz + 0x20).includes(0xe8));
+
+    // 容量欄位在插了兩塊之後仍然讀得對
+    check('容量在插兩塊之後仍讀得對', readCap(x, 0, 'maxLoc') === readCap(loadExe(raw), 0, 'maxLoc'));
+
+    // 認不得的映像要拒絕
+    const bad = loadExe(raw);
+    insertPassThrough(bad, defaultTable());
+    bad.image[imageOffset(bad, 0x12695)] = 0x90;
+    let threw = false;
+    try { insertPriceIndex(bad, { thresholdK: 500, cap: 0 }); } catch { threw = true; }
+    check('掛鉤點被動過就拒絕插碼', threw);
   }
 }
 

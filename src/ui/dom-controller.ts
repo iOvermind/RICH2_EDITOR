@@ -19,9 +19,11 @@ import {
 import {
   MAPS, CHAR_TABLE_FILE, isSupported as fsSupported, backendKind, hasFolder, pickGameFolder,
   readFile as readGameFile, tryReadFile, writeFile as writeGameFile, patchExe, readSpecialCount, readCaps,
+  readPassSettings,
 } from '../core/gamefolder';
 import { loadGlyphAtlas, atlasReady, canAddChar, addCharsToGameFont } from '../core/gamefont';
 import { History } from '../core/history';
+import { KIND_NAMES, defaultTable, isDefaultTable, type PassAction } from '../core/passthrough';
 import { initTilePicker, updateTilePickerSelection, syncTilePickerScale } from '../ui/tilepicker';
 import { initDebugTools } from '../tools/debugger';
 import { MapRenderer } from '../render/renderer';
@@ -77,8 +79,93 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     const tabEl = document.getElementById(tabId);
     if (tabEl) tabEl.classList.add('active');
     if (tabId === 'tabWarn') runValidation();
+    if (tabId === 'tabEngine') refreshEngineTab();
+    targetBtn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    updateTabArrows();
   });
 });
+
+// 頁籤放不下時用兩側的箭頭捲，而不是把整個面板撐寬
+const tabStrip = document.getElementById('tabStrip') as HTMLDivElement | null;
+const tabScrollL = document.getElementById('tabScrollL') as HTMLButtonElement | null;
+const tabScrollR = document.getElementById('tabScrollR') as HTMLButtonElement | null;
+
+function updateTabArrows() {
+  if (!tabStrip || !tabScrollL || !tabScrollR) return;
+  const max = tabStrip.scrollWidth - tabStrip.clientWidth;
+  const hidden = max <= 1;                       // 全部塞得下就把箭頭收起來
+  tabScrollL.style.display = hidden ? 'none' : '';
+  tabScrollR.style.display = hidden ? 'none' : '';
+  tabScrollL.disabled = tabStrip.scrollLeft <= 0;
+  tabScrollR.disabled = tabStrip.scrollLeft >= max - 1;
+}
+if (tabStrip && tabScrollL && tabScrollR) {
+  const step = () => Math.max(60, tabStrip.clientWidth * 0.6);
+  tabScrollL.addEventListener('click', () => tabStrip.scrollBy({ left: -step() }));
+  tabScrollR.addEventListener('click', () => tabStrip.scrollBy({ left: step() }));
+  tabStrip.addEventListener('scroll', updateTabArrows);
+  new ResizeObserver(updateTabArrows).observe(tabStrip);
+  updateTabArrows();
+}
+
+// ── 引擎頁：「經過就觸發」 ───────────────────────────────────────────
+// 全域設定（三張圖共用同一個 Run.exe），所以獨立一頁，不跟著地圖切換。
+// 值：0=不觸發、1=停下觸發再續走、2=走原版銀行那條過路提示（只有銀行有意義）。
+let passTable: PassAction[] = defaultTable();
+
+function currentPassTable(): PassAction[] { return passTable; }
+
+/** 打開引擎頁時把 Run.exe 現在的設定讀回來反白。讀不到就維持原版行為。 */
+async function refreshEngineTab(): Promise<void> {
+  const status = document.getElementById('passStatus');
+  try {
+    passTable = await readPassSettings();
+    if (status) status.textContent = isDefaultTable(passTable)
+      ? '目前的 Run.exe 是原版行為。'
+      : '目前的 Run.exe 已經套用了下面的設定。';
+  } catch {
+    if (status) status.textContent = '還沒選遊戲資料夾，下面顯示的是原版行為。';
+  }
+  renderEngineTab();
+}
+
+function renderEngineTab(): void {
+  const list = document.getElementById('passKindList');
+  if (!list) return;
+  list.innerHTML = '';
+  KIND_NAMES.forEach((name, kind) => {
+    const row = document.createElement('label');
+    row.className = 'flex items-center gap-2 text-xs cursor-pointer select-none py-0.5';
+
+    if (kind === 1) {
+      // 銀行有三種狀態：原版那條輕量過路提示、跟其他種類一樣停下來觸發、完全關掉。
+      const sel = document.createElement('select');
+      sel.className = 'bg-[#2d2d2d] border border-[#444] rounded px-1 py-0.5 text-xs';
+      ([[2, '原版：經過時提示'], [1, '停下來觸發'], [0, '關閉']] as const).forEach(([v, t]) => {
+        const o = document.createElement('option');
+        o.value = String(v); o.textContent = t;
+        if (passTable[kind] === v) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener('change', () => { passTable[kind] = Number(sel.value) as PassAction; });
+      row.append(labelSpan(kind, name), sel);
+    } else {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = passTable[kind] === 1;
+      cb.addEventListener('change', () => { passTable[kind] = (cb.checked ? 1 : 0) as PassAction; });
+      row.append(cb, labelSpan(kind, name));
+    }
+    list.appendChild(row);
+  });
+}
+
+function labelSpan(kind: number, name: string): HTMLSpanElement {
+  const s = document.createElement('span');
+  s.className = 'text-on-surface-variant';
+  s.textContent = `${name}（SPECIAL=${kind}）`;
+  return s;
+}
 
 function getSegName(segId: number): string {
   if (segId <= 0) return '';
@@ -2159,8 +2246,14 @@ async function saveToGame(): Promise<void> {
     }
 
     const maxLocByMap = await computeMaxLocByMap();
-    const r = await patchExe(logMsg, currentMapIndex, sc, maxLocByMap);
+    const r = await patchExe(logMsg, currentMapIndex, sc, maxLocByMap, currentPassTable());
     logMsg(`✅ 已一次性寫回：${loadedDskFileName}、${loadedPakFileName}、Run.exe`);
+    if (r.passThrough) {
+      const on = currentPassTable()
+        .map((v, k) => (v === 1 ? KIND_NAMES[k] ?? `種類${k}` : null)).filter(Boolean);
+      logMsg(`　Run.exe：經過就觸發 → ${on.length ? on.join('、') : '（無）'}` +
+        `　※ 已換成未壓縮版（原版是 EXEPACK 壓縮，程式碼段沒有插碼的餘裕）`);
+    }
     if (r.maxLocChanged > 0) {
       logMsg(`　Run.exe：${r.maxLocChanged} 張圖的地點上限已對齊各圖實際用到的最大編號` +
         `（${MAPS.map((m, i) => `${m.name}=${maxLocByMap[i] ?? '不動'}`).join('、')}）。`);

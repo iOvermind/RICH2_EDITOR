@@ -29,3 +29,6 @@ release/
 rich2/
 yarn-debug.log*
 yarn-error.log*
+
+# VS Code Counter 的統計輸出，不進版控
+.VSCodeCounter/

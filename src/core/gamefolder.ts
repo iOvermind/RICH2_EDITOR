@@ -3,20 +3,22 @@
 // 依地圖下拉選單載入對應 PART?.PAK + SAVE_?.DSK，並一次性把 DSK/PAK/EXE 寫回。
 // 桌面版（Tauri）與瀏覽器版共用；差異封裝在 folder-backend.ts。
 import { backend } from './folder-backend';
+import { loadExe, buildExe, readCap, writeCap, type ExeImage } from './exe';
+import { insertPassThrough, defaultTable, isDefaultTable, readPassTable, type PassAction } from './passthrough';
 
 export interface MapDef {
     name: string;   // 顯示名稱
     pak: string;    // 地圖檔
     dsk: string;    // 初始存檔
-    exeMaxLocOffset: number;  // Run.exe 內該圖 maxLocId [0x1096] 的 immediate offset
-    exeSpecialOffset: number; // Run.exe 內該圖 特殊地點數 [0x1098] 的 immediate offset
 }
+// 容量那兩個立即數的位置改由 exe.ts 的 MAP_CAPS 管（映像 offset，順序與 MAPS 相同）。
+// 這裡不再存檔案 offset：輸出的 Run.exe 是未壓縮版，檔頭大小跟原版不一樣。
 
 // 三張地圖 → 檔案對應（檔名大小寫需與資料夾一致）
 export const MAPS: MapDef[] = [
-    { name: '台灣', pak: 'Part1.pak', dsk: 'Save_7.dsk', exeMaxLocOffset: 0x124aa, exeSpecialOffset: 0x124b0 },
-    { name: '香港', pak: 'Part2.pak', dsk: 'Save_8.dsk', exeMaxLocOffset: 0x124c4, exeSpecialOffset: 0x124ca },
-    { name: '大富翁城', pak: 'Part3.pak', dsk: 'Save_9.dsk', exeMaxLocOffset: 0x124de, exeSpecialOffset: 0x124e4 },
+    { name: '台灣', pak: 'Part1.pak', dsk: 'Save_7.dsk' },
+    { name: '香港', pak: 'Part2.pak', dsk: 'Save_8.dsk' },
+    { name: '大富翁城', pak: 'Part3.pak', dsk: 'Save_9.dsk' },
 ];
 
 const EXE_NAME = 'Run.exe';
@@ -50,12 +52,13 @@ const fileExists = (name: string) => backend.exists(name);
  * 第一次覆蓋前會自動備份成 `<檔名>.bak`（已存在就不再覆蓋，保住最原始那份）。
  * 這件事很重要：DSK/PAK 一旦被編輯器覆寫就回不去了，而遊戲原版檔通常沒有別的來源。
  *
- * ⚠ **`Run.exe.bak` 不要拿來整檔還原。** `Run.exe` 裡有三個位元組
- * （`0xBFE`、`0xC49E`、`0xC4A2`）**是遊戲自己寫的**——它偵測完硬體後會把音效／顯示
- * 設定寫回執行檔。`.bak` 是出廠原版，整檔覆蓋等於把那些偵測結果清回預設值，
- * 實測過一次「進遊戲後配色跑掉、接著花屏」，時間點與還原 `Run.exe` 吻合。
- * 要撤銷編輯器的 patch，只改那幾個容量位元組就好（見 MAPS 的 exeMaxLocOffset /
- * exeSpecialOffset），別整檔覆蓋。
+ * `Run.exe.bak` 是**原版**，而且現在是正式的來源檔：每次 patchExe 都從它重建，
+ * 所以 patch 不會疊加，也不需要「撤銷」的邏輯。**它不能弄丟。**
+ *
+ * （舊註解說「遊戲會把硬體偵測結果寫回 Run.exe，所以不能整檔還原」——那是誤判。
+ * 實測：`Run.exe.bak` 與 `original/Run.exe` 逐位元組相同；跑過好幾次的執行檔
+ * 與重新建置的版本也是 0 bytes 差異。它記錄的症狀「配色跑掉、接著花屏」，
+ * 後來查明是別的原因。）
  */
 export async function writeFile(
     name: string, data: ArrayBuffer | Uint8Array, onLog?: (m: string) => void,
@@ -76,10 +79,8 @@ export async function writeFile(
 
 /** 讀取某圖目前在 Run.exe 裡的特殊地點數 [0x1098]。 */
 export async function readSpecialCount(mapIndex: number): Promise<number> {
-    const m = MAPS[mapIndex];
-    if (!m) throw new Error('無效地圖');
-    const raw = new Uint8Array(await readFile(EXE_NAME));
-    return new DataView(raw.buffer).getUint16(m.exeSpecialOffset, true);
+    if (!MAPS[mapIndex]) throw new Error('無效地圖');
+    return readCap(loadExe(new Uint8Array(await readFile(EXE_NAME))), mapIndex, 'special');
 }
 
 /** 遊戲資料夾裡所有含文字的檔案（用來蒐集字型支援的字集）。 */
@@ -94,75 +95,95 @@ export async function tryReadFile(name: string): Promise<ArrayBuffer | null> {
     try { return await readFile(name); } catch { return null; }
 }
 
-// ── 「經過就觸發」：查清楚了，但**刻意不做成可編輯** ─────────────────────
-//
-// 逆向結果見 docs/runexe-re.md §10。移動途中每經過一格，引擎會在解壓映像 `0x1A5F`
-// （檔案 `0x1C5F`）判斷 `cmp word ptr es:[bx], 1` —— es:[bx] 是該地點的 SPECIAL 欄位。
-//
-// ⚠ 但那個 `1` **不是「哪一種特殊地點會在經過時觸發」的開關**。條件成立後走到的
-// `0x1A68` 是**銀行專屬的過路處理**（讀玩家欄位 11、比對 `[0x1082]`、顯示訊息 0xE3、
-// 再 `call 0x75E4`），不是通用的特殊地點分派器（那個在 `0x340E`，由 `0x29D3` 呼叫）。
-//
-// 把條件放寬成區間試過了：其他種類會跑進銀行的處理流程，實測**整個遊戲配色跑掉、
-// 角色移動出界**。所以這裡不提供任何 patch —— 要做「經過觸發」得從 `0x1A5F` 改成
-// 呼叫 `0x340E`（還要先設好 `[0x2EA]`），9 個位元組放不下，需要跳板到空白區。
-const PASS_CHECK_OFFSET = 0x1c5f;   // 只留位置備查，編輯器不會寫這裡
-void PASS_CHECK_OFFSET;
-
 export interface MapCaps { name: string; maxLoc: number; special: number }
+
+/** 讀出 Run.exe 目前的「經過就觸發」設定，用來把 UI 反白成現況。 */
+export async function readPassSettings(): Promise<PassAction[]> {
+    return readPassTable(loadExe(new Uint8Array(await readFile(EXE_NAME))));
+}
 
 /** 讀出 Run.exe 目前三張圖的容量設定，用來回報「現在到底是什麼狀態」。 */
 export async function readCaps(): Promise<MapCaps[]> {
-    const raw = new Uint8Array(await readFile(EXE_NAME));
-    const dv = new DataView(raw.buffer);
-    return MAPS.map(m => ({
-        name: m.name,
-        maxLoc: dv.getUint16(m.exeMaxLocOffset, true),
-        special: dv.getUint16(m.exeSpecialOffset, true),
-    }));
+    const x = loadExe(new Uint8Array(await readFile(EXE_NAME)));
+    return MAPS.map((m, i) => ({ name: m.name, maxLoc: readCap(x, i, 'maxLoc'), special: readCap(x, i, 'special') }));
 }
 
 /**
- * Patch Run.exe：
- *  - 三張圖 maxLocId [0x1096] 統一設 282（RC 已是，等於只動台灣/香港）
- *  - 若給了 specialCount，順便把「當前地圖」的特殊地點數 [0x1098] 設為該值
- * 不碰玩家數 [0x1058]。首次會備份 Run.exe.bak。
- * 回傳 { maxLocChanged: 更動幾張圖的 maxLoc, specialChanged: 特殊數是否有變, specialFrom, specialTo }。
+ * 取得「乾淨的原版映像」。每次 patch 都從這裡重建，patch 就不會疊加，
+ * 也不需要任何撤銷邏輯——編輯器的設定就是唯一真相。
+ * `Run.exe.bak` 是原版；還沒有的話先拿現在這份備份起來。
+ */
+async function pristineExe(logMsg: (m: string) => void): Promise<ExeImage> {
+    if (!(await fileExists(EXE_BAK))) {
+        const cur = new Uint8Array(await readFile(EXE_NAME));
+        await backend.write(EXE_BAK, cur.slice());
+        logMsg(`已備份原始 ${EXE_NAME} → ${EXE_BAK}`);
+    }
+    return loadExe(new Uint8Array(await readFile(EXE_BAK)));
+}
+
+export interface PatchExeResult {
+    maxLocChanged: number; specialChanged: boolean; specialFrom: number; specialTo: number;
+    /** 有沒有真的寫檔（內容跟現況一樣就不寫） */
+    wrote: boolean;
+    /** 這次輸出的 Run.exe 有沒有含「經過就觸發」的跳板 */
+    passThrough: boolean;
+}
+
+/**
+ * 重建 Run.exe。順序是固定的：
+ *   原版映像 → 改容量（映像 offset）→ 需要的話插跳板 → 產出未壓縮 MZ
+ * 「先容量後跳板」是為了讓容量那幾個位元組跟著插入自動位移；不過 readCap/writeCap
+ * 兩邊都認得，順序反了也不會錯。
+ *
+ * ⚠ 輸出**一律是未壓縮版**（188KB → 216KB）。原版是 EXEPACK 壓縮的，但我們要在
+ * 程式碼段插跳板，壓縮版沒有這個餘裕。實測未壓縮版可正常遊玩，遊戲也不會回寫執行檔。
  */
 export async function patchExe(
     logMsg: (m: string) => void,
     mapIndex?: number,
     specialCount?: number,
-    /** 每張圖要設定的 maxLocId（null＝不動那張圖）。不給就沿用舊行為（一律 282）。 */
+    /** 每張圖要設定的 maxLocId（null＝沿用原版）。不給就一律 282。 */
     maxLocByMap?: (number | null)[],
-): Promise<{ maxLocChanged: number; specialChanged: boolean; specialFrom: number; specialTo: number }> {
+    /** 「經過就觸發」的種類表；不給就是原版行為（只有銀行的過路處理） */
+    passTable?: PassAction[],
+): Promise<PatchExeResult> {
     if (!(await ensureReadWrite())) throw new Error('沒有資料夾寫入權限');
-    const raw = new Uint8Array(await readFile(EXE_NAME));
-    if (!(await fileExists(EXE_BAK))) {
-        await writeFile(EXE_BAK, raw.slice());
-        logMsg(`已備份原始 ${EXE_NAME} → ${EXE_BAK}`);
-    }
-    const dv = new DataView(raw.buffer);
+    const x = await pristineExe(logMsg);
+    const before = await readCaps();
+
     let maxLocChanged = 0;
     for (let i = 0; i < MAPS.length; i++) {
-        const m = MAPS[i];
         // maxLocId 只要 ≥ 該圖實際用到的最大編號就夠，不需要一律開到 282。
         // 開太大會讓引擎把中間那一大段空記錄也當成合法地點（拍賣等事件可能因此挑到空槽）。
         const want = maxLocByMap ? maxLocByMap[i] : MAXLOC_TARGET;
         if (want == null) continue;
         const target = Math.min(Math.max(want, 1), MAXLOC_TARGET);
-        if (dv.getUint16(m.exeMaxLocOffset, true) !== target) {
-            dv.setUint16(m.exeMaxLocOffset, target, true);
-            maxLocChanged++;
-        }
+        if (readCap(x, i, 'maxLoc') !== target) { writeCap(x, i, 'maxLoc', target); }
+        if (target !== before[i].maxLoc) maxLocChanged++;
     }
+
     let specialChanged = false, specialFrom = 0, specialTo = 0;
     if (mapIndex != null && specialCount != null && MAPS[mapIndex]) {
-        const off = MAPS[mapIndex].exeSpecialOffset;
-        specialFrom = dv.getUint16(off, true);
-        specialTo = specialCount;
-        if (specialFrom !== specialTo) { dv.setUint16(off, specialTo & 0xffff, true); specialChanged = true; }
+        specialFrom = before[mapIndex].special;
+        specialTo = specialCount & 0xffff;
+        writeCap(x, mapIndex, 'special', specialTo);
+        specialChanged = specialFrom !== specialTo;
+    } else if (mapIndex != null && MAPS[mapIndex]) {
+        writeCap(x, mapIndex, 'special', before[mapIndex].special);   // 沿用現況
     }
-    if (maxLocChanged > 0 || specialChanged) await writeFile(EXE_NAME, raw);
-    return { maxLocChanged, specialChanged, specialFrom, specialTo };
+    // 沒指定的那幾張圖也要沿用現況，不然會被原版值蓋回去
+    for (let i = 0; i < MAPS.length; i++) {
+        if (i !== mapIndex) writeCap(x, i, 'special', before[i].special);
+    }
+
+    const table = passTable ?? defaultTable();
+    const passThrough = !isDefaultTable(table);
+    if (passThrough) insertPassThrough(x, table);
+
+    const out = buildExe(x);
+    const cur = new Uint8Array(await readFile(EXE_NAME));
+    const same = cur.length === out.length && cur.every((v, i) => v === out[i]);
+    if (!same) await backend.write(EXE_NAME, out);
+    return { maxLocChanged, specialChanged, specialFrom, specialTo, wrote: !same, passThrough };
 }
