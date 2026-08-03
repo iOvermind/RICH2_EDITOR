@@ -20,8 +20,11 @@
 //   金錢區塊 = u32[欄位][6玩家]，base 由 DS:0x11F0 的資源記錄取得
 //     欄位 0      現金
 //     欄位 1      存款
-//     欄位 20+N   第 N 支股票的持股張數（N = 1~8）
-//     欄位 40+N   第 N 支股票的股價 × 1000
+//     欄位 19+N   第 N 支股票的持股張數（N = 1~8 → 欄位 20~27）
+//     欄位 39+N   第 N 支股票的股價 × 1000（欄位 40~47，固定比持股欄位大 20）
+//   ⚠ 是 19+N 不是 20+N。實測：第 6 支台塑在欄位 25、第 8 支新光在欄位 27。
+//     一開始寫成 20+N，結果漏掉第 1 支、又多讀一個不存在的第 9 支——
+//     總資產短少 40~50 萬，指數因此一直偏低。
 //   股票市值 ≈ 張數 × (股價×1000 ÷ 1000)　← 先除再乘，誤差 <1%，門檻判斷夠用
 import { imageOffset, toOriginal, type ExeImage } from './exe';
 import { insertBlock, segmentEnds, assertPadded } from './codecave';
@@ -39,6 +42,10 @@ const CAVE_PARAS = 16;              // 256 bytes（變數區在 0xE0，12 段落
 const VAR = { idx: 0xe0, thr: 0xe2, cap: 0xe4, tlo: 0xe6, thi: 0xe8 };
 
 export interface PriceIndexOptions {
+    /** 診斷用：不套「只漲不落」，每次都用當下算出來的指數。可以看出計算是不是後來變小了 */
+    noHighWater?: boolean;
+    /** 診斷用：只把總資產的其中一項算進去，用來量出各項各自貢獻多少 */
+    only?: 'cash' | 'stocks';
     /**
      * 診斷用：直接把指數寫死成這個值，**完全不算資產**（跳板裡不會有 CALC）。
      * 用來把「乘法掛鉤點」跟「資產計算」兩個變因切開——如果寫死版行為正常，
@@ -114,15 +121,18 @@ function buildCave(caveAt: number, segBase: number, nextAt: number, opt: PriceIn
     emit(0x8b, 0xc6);                               // mov ax,si
     emit(0xd1, 0xe0); emit(0xd1, 0xe0);             // shl ax,1 ×2        ax = 玩家 × 4
     emit(0x03, 0xd8);                               // add bx,ax          → 欄位0[玩家]
-    emit(0x26, 0x8b, 0x07);                         // mov ax,es:[bx]     現金 lo
-    emit(0x26, 0x8b, 0x57, 0x02);                   // mov dx,es:[bx+2]   現金 hi
-    const call1 = cur.p; emit(0xe8, 0, 0);          // call ADD32
-    emit(0x26, 0x8b, 0x47, FIELD);                  // mov ax,es:[bx+24]  存款 lo
-    emit(0x26, 0x8b, 0x57, FIELD + 2);              // mov dx,es:[bx+26]  存款 hi
-    const call2 = cur.p; emit(0xe8, 0, 0);          // call ADD32
+    let call1 = -1, call2 = -1;
+    if (opt.only !== 'stocks') {
+        emit(0x26, 0x8b, 0x07);                     // mov ax,es:[bx]     現金 lo
+        emit(0x26, 0x8b, 0x57, 0x02);               // mov dx,es:[bx+2]   現金 hi
+        call1 = cur.p; emit(0xe8, 0, 0);            // call ADD32
+        emit(0x26, 0x8b, 0x47, FIELD);              // mov ax,es:[bx+24]  存款 lo
+        emit(0x26, 0x8b, 0x57, FIELD + 2);          // mov dx,es:[bx+26]  存款 hi
+        call2 = cur.p; emit(0xe8, 0, 0);            // call ADD32
+    }
 
-    // 股票：欄位 21~28 是張數，欄位 41~48 是股價×1000（相隔 20 欄 = 480 bytes）
-    emit(0xbf); w(21 * FIELD);                      // mov di,504
+    // 股票：欄位 20~27 是張數，欄位 40~47 是股價×1000（相隔 20 欄 = 480 bytes）
+    emit(0xbf); w(20 * FIELD);                      // mov di,480
     emit(0xb9); w(STOCK_N);                         // mov cx,8
     const SLOOP = cur.p;
     emit(0x26, 0x8b, 0x01);                         // mov ax,es:[bx+di]  張數（低 16 位就夠）
@@ -174,8 +184,10 @@ function buildCave(caveAt: number, segBase: number, nextAt: number, opt: PriceIn
     emit(0x76); rel8fwd(() => NOCAP);               // jbe NOCAP
     emit(0x8b, 0xc1);                               // mov ax,cx
     const NOCAP = cur.p;
-    emit(0x2e, 0x3b, 0x06); w(V('idx'));            // cmp ax,cs:[IDX]
-    emit(0x76); rel8fwd(() => DONE);                // jbe DONE           只漲不落
+    if (!opt.noHighWater) {
+        emit(0x2e, 0x3b, 0x06); w(V('idx'));        // cmp ax,cs:[IDX]
+        emit(0x76); rel8fwd(() => DONE);            // jbe DONE           只漲不落
+    }
     emit(0x2e, 0xa3); w(V('idx'));                  // mov cs:[IDX],ax
     const DONE = cur.p;
     emit(0x07, 0x5f, 0x5e, 0x5a, 0x59, 0x5b);       // pop es,di,si,dx,cx,bx
@@ -183,7 +195,7 @@ function buildCave(caveAt: number, segBase: number, nextAt: number, opt: PriceIn
 
     // ── ADD32：total += DX:AX
     const ADD32 = cur.p;
-    for (const at of [call1, call2, call3]) {
+    for (const at of [call1, call2, call3].filter((v) => v >= 0)) {
         const r = (ADD32 - (at + 3)) & 0xffff;
         c[at + 1] = r & 0xff; c[at + 2] = (r >> 8) & 0xff;
     }
