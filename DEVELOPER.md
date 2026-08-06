@@ -362,5 +362,6 @@ node tools/build-font-atlas.mjs    # 重烤 16×15 點陣圖庫（Windows 限定
 - 使用說明：[README.md](README.md)
 - 領域詞彙：[CONTEXT.md](CONTEXT.md)
 - `Run.exe` 逆向筆記：[docs/runexe-re.md](docs/runexe-re.md)
+- 介面規格：[INTERFACE.md](INTERFACE.md)
 - 變更紀錄：[CHANGELOG.md](CHANGELOG.md)
 - 文件與發佈規範：[docs/rules/](docs/rules/)
