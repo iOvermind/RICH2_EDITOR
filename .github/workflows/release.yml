@@ -53,14 +53,39 @@ jobs:
       - name: 建置
         run: npx tauri build
 
+      - name: 版本號一致性
+        shell: pwsh
+        run: |
+          # 發佈門檻。單一來源是 package.json；這裡只讀不寫，負責攔住漏改的那一處。
+          $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tauri = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargo = (Select-String src-tauri/Cargo.toml -Pattern '^version\s*=\s*"(.+)"' |
+                    Select-Object -First 1).Matches.Groups[1].Value
+          "package.json  $v`ntauri.conf    $tauri`nCargo.toml    $cargo"
+          if ($tauri -ne $v -or $cargo -ne $v) { throw "版本號不一致（見 docs/rules/VERSION_RULES.md §2.3）" }
+          # tag 也要對得上
+          if ('${{ github.ref_type }}' -eq 'tag' -and '${{ github.ref_name }}' -ne "v$v") {
+            throw "tag ${{ github.ref_name }} 與 package.json 的 v$v 不一致"
+          }
+
       - name: 收產物
         shell: pwsh
         run: |
+          # 命名依 docs/rules/RELEASE_RULES.md §2.1：只用 A-Za-z0-9.-_
+          # GitHub 上傳附件時會把其餘字元換成點，本機與線上檔名一旦不同，校驗碼就失去意義。
           $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
           New-Item -ItemType Directory -Force -Path release | Out-Null
           $t = 'src-tauri\target\release'
-          Copy-Item "$t\rich2-editor.exe" "release\Rich2Editor-v$v-portable.exe"
-          Copy-Item "$t\bundle\nsis\Rich2 Editor_${v}_x64-setup.exe" "release\Rich2Editor-v$v-setup.exe"
+          Copy-Item "$t\rich2-editor.exe" "release\RICH2_EDITOR-v$v-Portable.exe"
+          Copy-Item "$t\bundle\nsis\Rich2 Editor_${v}_x64-setup.exe" "release\RICH2_EDITOR-v$v-Setup.exe"
+
+          # 校驗碼是必附項（RELEASE_RULES §4.3），且必須由實際上傳的檔案計算
+          $lines = Get-ChildItem release\*.exe | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          }
+          [System.IO.File]::WriteAllLines("$PWD\release\SHA256SUMS.txt", $lines,
+            (New-Object System.Text.UTF8Encoding($false)))
+
           Get-ChildItem release | Format-Table Name, @{n='MB';e={'{0:N2}' -f ($_.Length/1MB)}}
 
       - name: 發佈
@@ -70,19 +95,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = '${{ github.ref_name }}'
-          $notes = @"
-          ## 下載
+          $version = $tag -replace '^v'
 
-          | 檔案 | 說明 |
-          |---|---|
-          | ``Rich2Editor-$tag-setup.exe`` | 安裝檔，裝到使用者目錄，不需要管理員權限 |
-          | ``Rich2Editor-$tag-portable.exe`` | 免安裝，直接執行 |
+          # 內文必須是 CHANGELOG 中該版本區塊的內容，不含其他版本（RELEASE_RULES §4.4）
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -Pattern "^## \[$([regex]::Escape($version))\]").LineNumber
+          if (-not $start) { throw "CHANGELOG.md 找不到 [$version] 區塊（RELEASE_RULES §4.1 的發佈門檻）" }
+          $rest = $lines[$start..($lines.Count - 1)]
+          $end = ($rest | Select-String -Pattern '^## \[').LineNumber
+          $notes = (($(if ($end) { $rest[0..($end - 2)] } else { $rest })) -join "`n").Trim()
 
-          兩個內容一樣，挑順手的。需要 Windows 10 以上。
-
-          使用說明：[README.md](https://github.com/${{ github.repository }}/blob/main/README.md)
-
-          > 開始編輯前，建議先把整個遊戲資料夾另外複製一份。
-          "@
-          gh release create $tag (Get-ChildItem release\*.exe | ForEach-Object { $_.FullName }) `
-            --title "Rich2 Editor $tag" --notes $notes
+          gh release create $tag `
+            (Get-ChildItem release\* | ForEach-Object { $_.FullName }) `
+            --title "[RICH2_EDITOR] $tag Release" --notes $notes

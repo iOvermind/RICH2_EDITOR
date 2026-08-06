@@ -18,9 +18,9 @@
 
   <!-- TopNavBar (頂部標題與載入列) -->
   <header
-    class="bg-[#131313] flex justify-between items-center w-full px-6 h-14 border-b border-outline-variant/15 z-50 shrink-0">
+    class="bg-background flex justify-between items-center w-full px-6 h-14 border-b border-outline-variant/15 z-50 shrink-0">
     <div class="flex items-center gap-8">
-      <span class="text-xl font-bold text-[#e5e2e1] font-headline tracking-tight">Rich2 Editor</span>
+      <span class="text-xl font-bold text-on-surface font-headline tracking-tight">Rich2 Editor</span>
     </div>
 
     <div class="flex items-center gap-3">
@@ -59,7 +59,7 @@
 
 <!-- Main Canvas Area (左側獨立區塊：地圖) -->
     <!-- Main Canvas Area (左側獨立區塊：純地圖，可隨意縮放) -->
-    <main class="relative flex-1 bg-[#131313] overflow-hidden border-r border-[#3c3c3c]">
+    <main class="relative flex-1 bg-background overflow-hidden border-r border-surface-container-highest">
       <canvas id="mapCanvas" width="864" height="720" 
               style="width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated;"></canvas>
     </main>
@@ -94,7 +94,7 @@
       </div>
 
       <!-- Scrollable Content Area -->
-      <div class="flex-1 overflow-y-auto overflow-x-hidden p-5 flex flex-col gap-6 bg-[#1e1e1e]" id="editPanel">
+      <div class="flex-1 overflow-y-auto overflow-x-hidden p-5 flex flex-col gap-6 bg-surface-container-low" id="editPanel">
 
         <!-- 圖塊頁 -->
         <div id="tabTile" class="tab-pane">
@@ -137,7 +137,7 @@
               <input type="number" id="editSpecial" min="0" max="10"
                 class="input-unified w-16 text-sm font-mono p-2">
               <div id="specialNameDisplay"
-                class="flex-1 bg-surface-container-lowest border-none p-2 text-xs text-on-surface-variant flex items-center italic rounded-xs overflow-hidden text-ellipsis whitespace-nowrap">
+                class="flex-1 bg-surface-container-lowest border-none p-2 text-xs text-on-surface-variant flex items-center italic rounded-md overflow-hidden text-ellipsis whitespace-nowrap">
               </div>
             </div>
           </div>
@@ -150,7 +150,7 @@
                 class="input-unified w-16 text-sm font-mono p-2">
               <input type="text" id="segNameDisplay" maxlength="8" placeholder="地段名稱"
                 title="遊戲畫面固定 3 個字寬。輸入 2 個字會自動在中間補全形空白（像原版的「中　環」），超過 3 個字會被截斷。"
-                class="input-unified flex-1 p-2 text-xs text-tertiary rounded-xs min-w-0">
+                class="input-unified flex-1 p-2 text-xs text-tertiary rounded-md min-w-0">
               <button id="addSegBtn" title="新增地段"
                 class="btn-unified w-8 flex items-center justify-center transition-colors">
                 <span class="material-symbols-outlined text-[16px]">add</span>
@@ -215,7 +215,7 @@
                 <input type="number" id="editDirLeft" min="0" max="282" placeholder="左"
                   class="input-unified transition-colors">
 
-                <div class="center-dot-box bg-primary/10 border border-primary/30 rounded-xs">
+                <div class="center-dot-box bg-primary/10 border border-primary/30 rounded-md">
                   <div class="w-1.5 h-1.5 bg-primary rounded-full"></div>
                 </div>
 
@@ -360,20 +360,20 @@
     </aside>
 
     <!-- 最右側邊欄：Console Log (固定在 Inspector 左側) -->
-    <div class="w-72 bg-[#252526] flex flex-col border-l border-[#3c3c3c] shrink-0 z-30">
+    <div class="w-72 bg-surface-container-high flex flex-col border-l border-surface-container-highest shrink-0 z-30">
       <!-- 格子資訊：點到哪格就顯示哪格，會整塊覆寫 -->
-      <div class="px-4 py-3 border-b border-[#3c3c3c] bg-[#2d2d2d] shrink-0">
-        <h3 class="text-sm font-bold font-headline text-[#e5e2e1]">格子資訊</h3>
+      <div class="px-4 py-3 border-b border-surface-container-highest bg-surface-container-high shrink-0">
+        <h3 class="text-sm font-bold font-headline text-on-surface">格子資訊</h3>
       </div>
-      <div id="cellInfo" class="p-4 font-mono text-xs text-[#9cdcfe] leading-relaxed shrink-0 border-b border-[#3c3c3c]">
+      <div id="cellInfo" class="p-4 font-mono text-xs text-primary leading-relaxed shrink-0 border-b border-surface-container-highest">
         尚未選取格子
       </div>
       <!-- 操作記錄：只會往下累加，不會被格子資訊洗掉 -->
-      <div class="px-4 py-2 border-b border-[#3c3c3c] bg-[#2d2d2d] shrink-0 flex items-center justify-between gap-2">
-        <h3 class="text-sm font-bold font-headline text-[#e5e2e1]">操作記錄</h3>
+      <div class="px-4 py-2 border-b border-surface-container-highest bg-surface-container-high shrink-0 flex items-center justify-between gap-2">
+        <h3 class="text-sm font-bold font-headline text-on-surface">操作記錄</h3>
         <button id="clearLogBtn" class="btn-unified px-2 py-0.5 text-[10px] shrink-0">清除</button>
       </div>
-      <div id="infoBox" class="flex-1 overflow-y-auto p-4 font-mono text-xs text-[#9cdcfe] leading-relaxed break-all">
+      <div id="infoBox" class="flex-1 overflow-y-auto p-4 font-mono text-xs text-primary leading-relaxed break-all">
         等待操作...
       </div>
     </div>
@@ -381,7 +381,7 @@
 
   <!-- 底部狀態列：左邊是最新一則操作記錄，右邊是當下狀態（由 dom-controller 更新） -->
   <footer
-    class="h-8 bg-[#131313] border-t border-outline-variant/15 flex items-center px-4 gap-6 font-mono text-[10px] shrink-0">
+    class="h-8 bg-background border-t border-outline-variant/15 flex items-center px-4 gap-6 font-mono text-[10px] shrink-0">
     <div class="flex gap-2 items-center text-tertiary min-w-0">
       <span class="material-symbols-outlined text-xs shrink-0">terminal</span>
       <span id="statusMsg" class="truncate">&gt; 編輯器已啟動</span>

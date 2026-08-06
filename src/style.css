@@ -37,6 +37,11 @@
   --font-headline: var(--token-font-headline);
   --font-body: var(--token-font-body);
   --font-mono: var(--token-font-mono);
+
+  /* 本專案額外定義的色：圖塊／特殊地點的選取框。
+     共用 token 沒有對應的語意（primary 已用於主要動作），而選取框要在密集的
+     圖塊網格上一眼可辨，所以獨立一個。見 INTERFACE.md §2。 */
+  --color-selection: #e51400;
 }
 
 /* =========================================
@@ -89,8 +94,8 @@ input[type="number"]::-webkit-outer-spin-button {
 .tab-bar {
   display: flex;
   align-items: flex-end;
-  background-color: #252526;
-  border-bottom: 1px solid #444;
+  background-color: var(--color-surface-container-high);
+  border-bottom: 1px solid var(--color-outline-variant);
   padding-top: 6px;
   padding-left: 2px;
 }
@@ -112,25 +117,25 @@ input[type="number"]::-webkit-outer-spin-button {
   align-self: stretch;
   background: transparent;
   border: none;
-  color: #888;
+  color: var(--color-on-surface-variant);
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
   user-select: none;
 }
-.tab-scroll:hover { color: #e5e2e1; }
-.tab-scroll:disabled { opacity: 0.25; cursor: default; }
+.tab-scroll:hover { color: var(--color-on-surface); }
+/* 停用表現由 docs/rules/tokens.css 統一提供（40% + 禁止游標），這裡不覆寫 */
 
 .tab-btn {
   flex: none;
   white-space: nowrap;
   text-align: center;
   padding: 6px 10px;
-  background-color: #2d2d2d;
-  color: #888;
-  border: 1px solid #444;
+  background-color: var(--color-surface-container-high);
+  color: var(--color-on-surface-variant);
+  border: 1px solid var(--color-outline-variant);
   border-bottom: none;
-  border-radius: 4px 4px 0 0;
+  border-radius: 6px 6px 0 0;
   margin-right: 4px;
   cursor: pointer;
   font-size: 14px;
@@ -140,14 +145,14 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 
 .tab-btn:hover {
-  background-color: #333;
-  color: #ccc;
+  background-color: var(--color-surface-container-highest);
+  color: var(--color-on-surface);
 }
 
 .tab-btn.active {
-  background-color: #1e1e1e; /* 配合底下的 panel 背景色 */
-  color: #e5e2e1;
-  border-bottom: 1px solid #1e1e1e; /* 覆蓋掉 .tab-bar 的底線 */
+  background-color: var(--color-surface-container-low); /* 配合底下的 panel 背景色 */
+  color: var(--color-on-surface);
+  border-bottom: 1px solid var(--color-surface-container-low); /* 覆蓋掉 .tab-bar 的底線 */
   margin-bottom: -1px;
 }
 
@@ -182,7 +187,7 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 
 .tile-btn.selected {
-  border-color: #e51400; /* 選取時的紅框 */
+  border-color: var(--color-selection); /* 選取時的紅框 */
 }
 
 /* 特殊地點：整組 2x2 一顆按鈕，不讓使用者拼四個單塊 */
@@ -195,22 +200,22 @@ input[type="number"]::-webkit-outer-spin-button {
   cursor: pointer;
   background: transparent;
   border: 2px solid transparent;
-  border-radius: 3px;
+  border-radius: 6px;
   box-sizing: border-box;
 }
 
 .special-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-surface-container-high);
 }
 
 .special-btn.selected {
-  border-color: #e51400;
+  border-color: var(--color-selection);
 }
 
 .special-btn-cap {
   font-size: 10px;
   line-height: 1;
-  color: var(--color-on-surface-variant, #a0a0a0);
+  color: var(--color-on-surface-variant);
   white-space: nowrap;
 }
 
@@ -218,23 +223,23 @@ input[type="number"]::-webkit-outer-spin-button {
    十字導航區（尺寸鎖死，避免被通用輸入框樣式撐開）
    ========================================= */
 .dir-grid-container {
-  width: 124px; /* (40px * 3) + gap */
+  width: 112px; /* (36px * 3) + gap */
   margin: 0 auto;
 }
 
 .dir-grid input[type="number"] {
-  width: 40px !important;
-  height: 40px !important;
+  width: 36px !important;
+  height: 36px !important;
   padding: 0 !important;
-  line-height: 40px;
+  line-height: 36px;
   /* !important 是為了壓過 #editPanel input[type="number"] 的 14px */
   font-size: 13px !important;
   text-align: center;
 }
 
 .dir-grid .center-dot-box {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -252,25 +257,25 @@ input[type="number"]::-webkit-outer-spin-button {
 
 #priceTable th,
 #priceTable td {
-  border: 1px solid #555;
+  border: 1px solid var(--color-outline-variant);
   padding: 4px;
   text-align: center;
 }
 
 #priceTable th {
-  background: #3c3c3c;
+  background: var(--color-surface-container-highest);
 }
 
 #priceTbody input {
   font-size: 12px;
   padding: 2px 6px;
-  height: 24px;
-  background: #0e0e0e;
-  border: 1px solid #404751;
-  border-radius: 3px;
+  height: 28px;
+  background: var(--color-surface-container-lowest);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 6px;
   width: 80px;
   text-align: right;
-  color: #d4d4d4;
+  color: var(--color-on-surface);
 }
 
 #priceTbody td {
@@ -304,57 +309,56 @@ input[type="number"]::-webkit-outer-spin-button {
    ========================================= */
 .btn-unified {
   font-size: 14px;
-  background-color: #2a2a2a;
-  border: 1px solid #444;
-  border-radius: 4px;
-  color: #e5e2e1;
+  background-color: var(--color-surface-container-high);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 6px;
+  color: var(--color-on-surface);
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
 }
 .btn-unified:hover {
-  background-color: #3a3a3a;
-  border-color: #666;
+  background-color: var(--color-surface-container-highest);
+  border-color: var(--color-outline-variant);
 }
 .btn-primary {
-  background-color: #007acc;
-  border: 1px solid #005f9e;
-  color: #fff;
+  background-color: var(--color-primary-container);
+  border: 1px solid var(--color-primary-container);
+  color: var(--color-on-primary-container);
 }
 .btn-primary:hover {
-  background-color: #008be6;
-  border-color: #007acc;
+  filter: brightness(1.1);
 }
 
 .select-unified {
   font-size: 14px;
-  background-color: #1c1c1c;
-  border: 1px solid #444;
-  border-radius: 4px;
-  color: #e5e2e1;
+  background-color: var(--color-surface-container-low);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 6px;
+  color: var(--color-on-surface);
   padding-right: 8px;
   transition: border-color 0.15s;
 }
 /* 只改邊框色當作 hover/focus 的提示；焦點框由 docs/rules/tokens.css 的
    :focus-visible 統一提供，這裡不得寫 outline:none 把它蓋掉。 */
 .select-unified:hover, .select-unified:focus {
-  border-color: #666;
+  border-color: var(--color-outline-variant);
 }
 .select-unified option {
-  background-color: #1c1c1c;
-  color: #e5e2e1;
+  background-color: var(--color-surface-container-low);
+  color: var(--color-on-surface);
 }
 
 .input-unified {
   font-size: 14px;
-  background-color: #141414;
-  border: 1px solid #444;
-  border-radius: 4px;
-  color: #e5e2e1;
+  background-color: var(--color-surface-container-lowest);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 6px;
+  color: var(--color-on-surface);
   transition: border-color 0.15s;
 }
 .input-unified:focus {
-  border-color: #007acc;
+  border-color: var(--color-primary-container);
 }
 .input-unified::placeholder {
-  color: #6b6b6b;
+  color: color-mix(in srgb, var(--color-on-surface-variant) 50%, transparent);
 }

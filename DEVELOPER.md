@@ -231,9 +231,8 @@ powershell -ExecutionPolicy Bypass -File packaging\serve.ps1 -NoBrowser
 
 Rust 的 release profile（`src-tauri/Cargo.toml`）刻意為體積調校：`opt-level = "s"`、`lto = true`、`codegen-units = 1`、`panic = "abort"`、`strip = true`。這是要發佈給人下載的桌面工具，體積比編譯時間重要。
 
-> **已知落差**：`tools/build-app.ps1` 目前輸出 `Rich2Editor-vX.Y.Z-portable.exe` 與
-> `-setup.exe`，尚未符合 [docs/rules/RELEASE_RULES.md](docs/rules/RELEASE_RULES.md) §2.1
-> 要求的 `[RICH2_EDITOR][v1.0.0][Setup].exe` 格式。發佈前必須調整建置腳本的命名。
+產物命名依 [docs/rules/RELEASE_RULES.md](docs/rules/RELEASE_RULES.md) §2.1：只用
+`A-Za-z0-9.-_`，因為 GitHub 上傳附件時會把其餘字元換成點。`release/` 不進版控。
 
 ### 版本號
 
