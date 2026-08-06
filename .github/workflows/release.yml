@@ -80,7 +80,7 @@ jobs:
 
           兩個內容一樣，挑順手的。需要 Windows 10 以上。
 
-          使用說明：[docs/使用說明.md](https://github.com/${{ github.repository }}/blob/main/docs/%E4%BD%BF%E7%94%A8%E8%AA%AA%E6%98%8E.md)
+          使用說明：[README.md](https://github.com/${{ github.repository }}/blob/main/README.md)
 
           > 開始編輯前，建議先把整個遊戲資料夾另外複製一份。
           "@

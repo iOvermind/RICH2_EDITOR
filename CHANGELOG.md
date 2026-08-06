@@ -5,10 +5,6 @@
 格式依 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號依語意化版本
 （見 [docs/rules/VERSION_RULES.md](docs/rules/VERSION_RULES.md)）。日期格式為 `YYYY-MM-DD`。
 
-> 2026-08-01 曾發佈 `v1.0.0`。依三專案統一改版的規劃，該 release 將重新發佈
-> （見 `TAURI_MIGRATION.md` 的發佈計畫），因此本紀錄自 `[Unreleased]` 起算，
-> 內容即重新發佈的 `v1.0.0` 所包含的全部功能。
-
 ## [Unreleased]
 
 ### Added (新增)

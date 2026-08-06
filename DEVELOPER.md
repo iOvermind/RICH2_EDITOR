@@ -1,6 +1,6 @@
 # Rich2 Editor 開發者文件
 
-> 這份文件給**要修改這個專案的人**。使用說明請看 [README.md](README.md) 與 [docs/使用說明.md](docs/使用說明.md)。
+> 這份文件給**要修改這個專案的人**。使用說明請看 [README.md](README.md)。
 > 文件與發佈規範見 [docs/rules/](docs/rules/)。
 
 ---
@@ -110,7 +110,6 @@ RICH2_EDITOR/
 ├─ tests/                   回歸測試與 loader
 ├─ packaging/               瀏覽器版的極簡靜態伺服器
 ├─ docs/
-│  ├─ 使用說明.md            使用者文件
 │  ├─ runexe-re.md          Run.exe 逆向筆記
 │  └─ rules/                文件與發佈規範
 └─ CONTEXT.md               領域詞彙表
@@ -319,7 +318,7 @@ node tools/build-font-atlas.mjs    # 重烤 16×15 點陣圖庫（Windows 限定
 | 寫回 `Part?.pak`、`Save_?.dsk`、`Wor.pak` | 使用者的遊戲檔案 | 每個檔案**第一次**被覆寫前自動留 `.bak`；已存在則不覆蓋 |
 | 寫回 `Run.exe` | 遊戲主程式 | 同上，但 **`.bak` 不可整檔還原**，見下 |
 
-⚠ **`Run.exe.bak` 不能整檔覆蓋回去。** `Run.exe` 裡有三個位元組是**遊戲自己在執行時寫入的**（偵測到的音效與顯示設定），整檔還原會把使用者的設定一起清掉。要撤銷編輯器的修改，只改那幾個容量數值。這件事也寫在 [docs/使用說明.md](docs/使用說明.md)，動到 `Run.exe` 寫回路徑時務必維持。
+⚠ **`Run.exe.bak` 不能整檔覆蓋回去。** `Run.exe` 裡有三個位元組是**遊戲自己在執行時寫入的**（偵測到的音效與顯示設定），整檔還原會把使用者的設定一起清掉。要撤銷編輯器的修改，只改那幾個容量數值。這件事也寫在 [README.md](README.md) 的常見問題，動到 `Run.exe` 寫回路徑時務必維持。
 
 ---
 
@@ -360,7 +359,7 @@ node tools/build-font-atlas.mjs    # 重烤 16×15 點陣圖庫（Windows 限定
 
 ## 相關文件
 
-- 使用說明：[README.md](README.md)、[docs/使用說明.md](docs/使用說明.md)
+- 使用說明：[README.md](README.md)
 - 領域詞彙：[CONTEXT.md](CONTEXT.md)
 - `Run.exe` 逆向筆記：[docs/runexe-re.md](docs/runexe-re.md)
 - 變更紀錄：[CHANGELOG.md](CHANGELOG.md)
