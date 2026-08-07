@@ -1,0 +1,332 @@
+@import "tailwindcss";
+/* 自帶圖示字體，不連 fonts.googleapis.com。來源見 assets/fonts/fonts.css。 */
+@import "./assets/fonts/fonts.css";
+/* 共用設計 token 的唯一來源。色值、字體堆疊、不透明度檔位、焦點與停用樣式都在裡面，
+   正典是 DEV_TEMPLATE，改動請見 docs/rules/INTERFACE_RULES.md §2.1。
+   下面的 @theme 只做「引用」不做「複製」——手抄兩份遲早會對不上。 */
+@import "../docs/rules/tokens.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-background: var(--token-color-background);
+  --color-surface: var(--token-color-surface);
+  --color-surface-container-lowest: var(--token-color-surface-container-lowest);
+  --color-surface-container-low: var(--token-color-surface-container-low);
+  --color-surface-container-high: var(--token-color-surface-container-high);
+  --color-surface-container-highest: var(--token-color-surface-container-highest);
+  --color-surface-bright: var(--token-color-surface-bright);
+  --color-on-background: var(--token-color-on-background);
+  --color-on-surface: var(--token-color-on-surface);
+  --color-on-surface-variant: var(--token-color-on-surface-variant);
+  --color-outline-variant: var(--token-color-outline-variant);
+  --color-primary: var(--token-color-primary);
+  --color-primary-container: var(--token-color-primary-container);
+  --color-on-primary-container: var(--token-color-on-primary-container);
+  --color-tertiary: var(--token-color-tertiary);
+  --color-error: var(--token-color-error);
+  --color-level-warn: var(--token-color-level-warn);
+
+  --font-headline: var(--token-font-headline);
+  --font-body: var(--token-font-body);
+  --font-mono: var(--token-font-mono);
+
+  /* 本專案額外定義的色：選取框。
+     共用 token 沒有對應的語意（primary 已用於主要動作），而選取框要在密集的
+     方塊網格上一眼可辨，所以獨立一個。與 RICH2_EDITOR 同值。見 INTERFACE.md §2。 */
+  --color-selection: #e51400;
+}
+
+/* =========================================
+   基礎
+   ========================================= */
+/* 圖示字體的樣式。少了 font-family 或連字設定，按鈕上會直接顯示 folder_open 這些英文字。 */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: 'liga';   /* 圖示名稱是靠連字轉成圖形的 */
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+}
+
+/* 標籤統一 12px（INTERFACE.md §3 的「欄位標籤」） */
+label {
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
+
+/* Tailwind v4 的 preflight 把按鈕游標改成 default，這裡補回手指。
+   停用時的 not-allowed 由 docs/rules/tokens.css 提供，所以要排除 :disabled。 */
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+/* 殺掉數字輸入框的上下小箭頭 */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: none;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* =========================================
+   頁籤
+   ========================================= */
+.tab-bar {
+  display: flex;
+  align-items: flex-end;
+  background-color: var(--color-surface-container-high);
+  border-bottom: 1px solid var(--color-outline-variant);
+  padding-top: 6px;
+  padding-left: 2px;
+}
+
+/* 頁籤帶：放不下就橫向捲，而不是把整個面板撐寬。捲軸藏起來，改用兩側的箭頭。 */
+.tab-strip {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+.tab-strip::-webkit-scrollbar { display: none; }
+
+.tab-scroll {
+  flex: none;
+  width: 18px;
+  align-self: stretch;
+  background: transparent;
+  border: none;
+  color: var(--color-on-surface-variant);
+  font-size: 16px;
+  line-height: 1;
+  user-select: none;
+}
+.tab-scroll:hover { color: var(--color-on-surface); }
+/* 停用表現由 docs/rules/tokens.css 統一提供（40% + 禁止游標），這裡不覆寫 */
+
+.tab-btn {
+  flex: none;
+  white-space: nowrap;
+  text-align: center;
+  padding: 6px 10px;
+  background-color: var(--color-surface-container-high);
+  color: var(--color-on-surface-variant);
+  border: 1px solid var(--color-outline-variant);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  margin-right: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  user-select: none;
+  transition: background-color 0.15s;
+}
+
+.tab-btn:hover {
+  background-color: var(--color-surface-container-highest);
+  color: var(--color-on-surface);
+}
+
+.tab-btn.active {
+  background-color: var(--color-surface-container-low); /* 配合底下的 panel 背景色 */
+  color: var(--color-on-surface);
+  border-bottom: 1px solid var(--color-surface-container-low); /* 覆蓋掉 .tab-bar 的底線 */
+  margin-bottom: -1px;
+}
+
+.tab-pane {
+  display: none;
+}
+.tab-pane.active {
+  display: block;
+}
+
+/* =========================================
+   頁籤內容的佔位樣式
+   （實作各頁時把 .pane-todo 換成真正的控制項，.pane-source 留著）
+   ========================================= */
+.pane-source {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-primary);
+  word-break: break-all;
+}
+
+.pane-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--color-on-surface-variant) 70%, transparent);
+}
+
+.pane-todo {
+  padding: 24px 0;
+  text-align: center;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-on-surface-variant) 50%, transparent);
+  border: 1px dashed var(--color-outline-variant);
+  border-radius: 6px;
+}
+
+.pane-heading {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-on-surface-variant);
+  margin-bottom: 6px;
+}
+
+/* 名稱 / 數值兩欄表。數值靠右、等寬字，好一眼掃過去比對。 */
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  font-size: 12px;
+}
+.kv dt {
+  color: color-mix(in srgb, var(--color-on-surface-variant) 70%, transparent);
+}
+.kv dd {
+  text-align: right;
+  font-family: var(--font-mono);
+  color: var(--color-on-surface);
+}
+
+/* 結構檢查的單行結果 */
+.check-line {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0;
+}
+.check-line.ok::before {
+  content: '✓';
+  color: var(--color-tertiary);
+}
+.check-line.warn::before {
+  content: '!';
+  color: var(--color-level-warn);
+  font-weight: 700;
+}
+.check-line.warn {
+  color: var(--color-level-warn);
+}
+
+/* =========================================
+   地圖畫布的容器
+   ========================================= */
+/* 地圖小於容器時置中，大於容器時（100% 是 2400×2400）必須能捲到左上角。
+ *
+ * ⚠ 純 `place-items: center` 會讓超出的部分**往兩側平均溢出**，而捲軸捲不到負的方向——
+ *   放大到 100% 時地圖的左上角就永遠看不到了。`safe` 關鍵字的作用正是「一旦會溢出就
+ *   改成靠起點對齊」。不要為了相容性把它拿掉換成 place-items-center。 */
+#mapViewport {
+  place-items: safe center;
+}
+
+/* =========================================
+   操作記錄
+   等級名稱與配色屬「必須共用」，見 INTERFACE.md §7。
+   ========================================= */
+.log-line {
+  display: flex;
+  gap: 6px;
+}
+
+.log-level {
+  flex: none;
+  font-weight: 700;
+}
+
+.log-INFO    { color: var(--color-on-surface-variant); }
+.log-WARN    { color: var(--color-level-warn); }
+.log-ERROR   { color: var(--color-error); }
+.log-FATAL   { color: var(--color-error); }
+.log-SUCCESS { color: var(--color-tertiary); }
+.log-DONE    { color: var(--color-tertiary); }
+
+/* =========================================
+   右下按鈕區
+   ========================================= */
+.action-block {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.action-block button {
+  padding: 6px;
+}
+
+/* 屬性面板內部的輸入框字體加大好辨識 */
+#editPanel input[type="number"],
+#editPanel select {
+  font-size: 14px;
+}
+
+/* =========================================
+   共用元件（按鈕、下拉、輸入框）
+   ========================================= */
+.btn-unified {
+  font-size: 14px;
+  background-color: var(--color-surface-container-high);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 6px;
+  color: var(--color-on-surface);
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.btn-unified:hover:not(:disabled) {
+  background-color: var(--color-surface-container-highest);
+}
+.btn-primary {
+  background-color: var(--color-primary-container);
+  border: 1px solid var(--color-primary-container);
+  color: var(--color-on-primary-container);
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.select-unified {
+  font-size: 14px;
+  background-color: var(--color-surface-container-low);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 6px;
+  color: var(--color-on-surface);
+  padding-right: 8px;
+  transition: border-color 0.15s;
+}
+/* 焦點框由 docs/rules/tokens.css 的 :focus-visible 統一提供，
+   這裡不得寫 outline:none 把它蓋掉（INTERFACE.md §7）。 */
+.select-unified option {
+  background-color: var(--color-surface-container-low);
+  color: var(--color-on-surface);
+}
+
+.input-unified {
+  font-size: 14px;
+  background-color: var(--color-surface-container-lowest);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 6px;
+  color: var(--color-on-surface);
+  transition: border-color 0.15s;
+}
+.input-unified:focus {
+  border-color: var(--color-primary-container);
+}
+.input-unified::placeholder {
+  color: color-mix(in srgb, var(--color-on-surface-variant) 50%, transparent);
+}
