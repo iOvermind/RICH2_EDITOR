@@ -255,6 +255,13 @@ Rust 的 release profile（`src-tauri/Cargo.toml`）刻意為體積調校：`opt
 node tools/fetch-fonts.mjs         # 重新產生 Material Symbols 子集（會自動掃 index.html 找出用到哪些圖示）
 node tools/add-chars.mjs 苗栗宜蘭   # 離線把指定的字加進 rich2/Wor.pak
 node tools/build-font-atlas.mjs    # 重烤 16×15 點陣圖庫（Windows 限定）
+
+# Run.exe 的離線 patch（編輯器裡也做得到，這是給查錯與批次用的）
+node --import ./tests/loader.mjs tools/patch-passthrough.mts <in.exe> <out.exe> [--table 3=1,8=1]
+node --import ./tests/loader.mjs tools/patch-priceindex.mts <in.exe> <out.exe> --like rich2/Run.exe --threshold 500000
+#   ⚠ patch-priceindex 一定要用 --like 指向遊戲目錄現在那支 Run.exe：編輯器把三張圖的
+#     地點／特殊地點上限寫在執行檔裡，直接拿原版重建會把上限打回原版值，玩家走到
+#     新增的特殊地點就當機。
 ```
 
 應用程式圖示（棋盤 + 細明體的「富」）以 `npx tauri icon` 切成 `src-tauri/icons/` 的各種尺寸。產生原圖的腳本目前不在庫內。
