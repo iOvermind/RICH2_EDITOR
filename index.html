@@ -11,6 +11,10 @@
 
   <!-- 字體與圖示都自帶（src/assets/fonts/），不連外；產生方式見 tools/fetch-fonts.mjs -->
 
+  <!-- 分頁圖示。跟桌面版同一張（src-tauri/icons/ 那套是 Tauri 給視窗與安裝檔用的，
+       網頁這邊要自己引用，不然 npm run dev 只會看到瀏覽器的預設空白圖示）。 -->
+  <link rel="icon" type="image/png" href="./app-icon.png">
+
 
 </head>
 
@@ -308,6 +312,35 @@
           </div>
           <div id="passKindList" class="space-y-1"></div>
           <p id="passStatus" class="text-[11px] text-on-surface-variant/60"></p>
+
+          <div class="pt-3 border-t border-[#333]">
+            <h3 class="text-xs font-semibold uppercase tracking-widest text-on-surface-variant/70 mb-1">物價指數</h3>
+            <p class="text-[11px] leading-relaxed text-on-surface-variant/70">
+              全場玩家的<strong>現金＋存款＋股票市值</strong>每超過一個門檻，所有過路費就多一倍——等差，
+              用來讓後期的局面加速收斂。股票用的是股市當下的現價，不是買入價；地產不計入。<br>
+              門檻填 <code>0</code> 物價指數就不會上升（＝關閉）。
+            </p>
+          </div>
+          <div class="flex items-center gap-3 flex-wrap text-xs">
+            <label class="flex items-center gap-1.5">
+              <span class="text-on-surface-variant w-8">門檻</span>
+              <input id="priceIndexThreshold" type="number" min="0" max="99999999" step="10000"
+                class="w-24 bg-[#2d2d2d] border border-[#444] rounded px-1.5 py-0.5 text-xs">
+              <span class="text-on-surface-variant/60">元（0＝關閉）</span>
+            </label>
+            <label class="flex items-center gap-1.5">
+              <span class="text-on-surface-variant w-8">上限</span>
+              <input id="priceIndexCap" type="number" min="0" max="65535" step="1"
+                class="w-24 bg-[#2d2d2d] border border-[#444] rounded px-1.5 py-0.5 text-xs">
+              <span class="text-on-surface-variant/60">倍（0＝無上限）</span>
+            </label>
+            <label class="flex items-center gap-1.5 cursor-pointer select-none"
+              title="預設是只漲不落：指數停在歷史最高點，資產縮水也不會退回去。勾選後指數會跟著當下的資產上下浮動。">
+              <input id="priceIndexFall" type="checkbox">
+              <span class="text-on-surface-variant">允許回落</span>
+            </label>
+          </div>
+          <p id="priceIndexStatus" class="text-[11px] text-on-surface-variant/60"></p>
         </div>
 
         <!-- 警告頁 -->

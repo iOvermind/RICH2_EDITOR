@@ -15,7 +15,7 @@ import { parseSaveDskCore, rebuildDskBufferCore } from '../src/core/parser.ts';
 import { loadExe, buildExe, readCap, writeCap, imageOffset, writeInsertList, MAP_CAPS } from '../src/core/exe.ts';
 import { insertPassThrough, defaultTable, readPassTable, TABLE_LEN } from '../src/core/passthrough.ts';
 import { insertBlock, segmentEnds } from '../src/core/codecave.ts';
-import { insertPriceIndex } from '../src/core/priceindex.ts';
+import { insertPriceIndex, readPriceIndexSettings } from '../src/core/priceindex.ts';
 
 /** 讀某個 DSK 的角色參數，附上取值器與「這張圖有幾個角色」 */
 function loadDsk(base: string, dsk: string) {
@@ -1076,7 +1076,7 @@ console.log('\n=== 10. Run.exe 映像 ===');
     let threw = false;
     try { insertPassThrough(bad, t); } catch { threw = true; }
     check('掛鉤點被動過就拒絕插碼', threw);
-  }
+
 }
 
 
@@ -1164,7 +1164,7 @@ console.log('\n=== 12. 物價指數 ===');
       return x;
     };
 
-    const x = mk({ thresholdK: 500, cap: 0 });
+    const x = mk({ threshold: 500000, cap: 0 });
     check('插了兩塊（經過就觸發 + 物價指數）', x.inserts?.length === 2);
     check('第二塊插在段 0xCC5 的尾端', x.inserts![1].atOriginal === 0x1c6a0);
 
@@ -1181,20 +1181,42 @@ console.log('\n=== 12. 物價指數 ===');
       x.image[cave] === 0x26 && x.image[cave + 1] === 0x8b && x.image[cave + 2] === 0x07);
 
     // 變數：指數起始 1、門檻與上限照設定寫入
+    const VAR_AT = 0x180;
     const rd = (o: number) => x.image[cave + o] | (x.image[cave + o + 1] << 8);
-    check('指數起始 = 1（還沒算之前不改變過路費）', rd(0xe0) === 1);
-    check('門檻寫進去了', rd(0xe2) === 500);
-    check('上限 0 = 無上限', rd(0xe4) === 0);
-    const y = mk({ thresholdK: 300, cap: 8 });
+    check('指數起始 = 1（還沒算之前不改變過路費）', rd(VAR_AT) === 1);
+    check('門檻寫進去了（32 位元，u16 裝不下 50 萬）',
+      (rd(VAR_AT + 2) | (rd(VAR_AT + 4) << 16)) === 500000);
+    check('上限 0 = 無上限', rd(VAR_AT + 6) === 0);
+    const y = mk({ threshold: 300000, cap: 8 });
     const cy = imageOffset(y, 0x1c6a0) - y.inserts![1].bytes;
+    const ry = (o: number) => y.image[cy + o] | (y.image[cy + o + 1] << 8);
     check('門檻與上限都吃得到設定',
-      (y.image[cy + 0xe2] | (y.image[cy + 0xe3] << 8)) === 300
-      && (y.image[cy + 0xe4] | (y.image[cy + 0xe5] << 8)) === 8);
+      (ry(VAR_AT + 2) | (ry(VAR_AT + 4) << 16)) === 300000 && ry(VAR_AT + 6) === 8);
+
+    // 股票共 20 支（欄位 20~39），不是 8 支。2026-08-07 用兩根樁釘死：同一份記憶體
+    // 快照裡買第 1 支 80 張落在欄位 20、買第 20 支 118 張落在欄位 39。
+    // 舊版寫 8 只掃到欄位 27，第 9 支以後的持股全被跳過——這就是「股票沒算到」。
+    // 實機驗證：只算股票、門檻 1，遊戲內量到指數 131，與畫面加總的 12 萬多吻合。
+    check('股票迴圈跑滿 20 支（mov cx,20）',
+      x.image.subarray(cave, cave + VAR_AT).join(',').includes([0xb9, 20, 0].join(',')));
+
+    // 地產：Σ(土地價格 + 房屋級數 × 增值價格)。認地點區塊與價格表的資源記錄位址。
+    // 實測驗證：四家算出 1800/2700/2100/4700，與總資產反推的數字完全相同。
+    const code = x.image.subarray(cave, cave + VAR_AT).join(',');
+    check('不算地產（沒有地點區塊 mov di,0x127a）', !code.includes([0xbf, 0x7a, 0x12].join(',')));
+    check('有算現金與存款（讀欄位 0 與 24）',
+      code.includes([0x26, 0x8b, 0x07].join(',')) && code.includes([0x26, 0x8b, 0x47, 24].join(',')));
+    check('股票迴圈讀現價陣列（mov di,0x1446）', code.includes([0xbf, 0x46, 0x14].join(',')));
+    check('股票用 FPU 乘（fld dword es:[si]）', code.includes([0x26, 0xd9, 0x04].join(',')));
+    // 跳板的機器碼不能長到蓋掉變數區。現金+存款+股票版是 ~210 bytes、變數區在 0x140(320)。
+    // 蓋過去不會有任何錯誤訊息，只會靜靜算錯，所以留一段空白當金絲雀。
+    check('跳板程式碼與變數區之間還有 32 bytes 空隙',
+      x.image.subarray(cave + VAR_AT - 32, cave + VAR_AT).every((b) => b === 0x90));
 
     // 診斷模式：指數寫死，跳板裡不會有資產計算（用來把兩個變因切開）
-    const z = mk({ thresholdK: 0, cap: 0, fixedIndex: 2 });
+    const z = mk({ threshold: 0, cap: 0, fixedIndex: 2 });
     const cz = imageOffset(z, 0x1c6a0) - z.inserts![1].bytes;
-    check('fixedIndex 直接寫進指數', (z.image[cz + 0xe0] | (z.image[cz + 0xe1] << 8)) === 2);
+    check('fixedIndex 直接寫進指數', (z.image[cz + VAR_AT] | (z.image[cz + VAR_AT + 1] << 8)) === 2);
     check('fixedIndex 模式沒有 call（跳板裡沒有資產計算）',
       !z.image.subarray(cz, cz + 0x20).includes(0xe8));
 
@@ -1206,8 +1228,37 @@ console.log('\n=== 12. 物價指數 ===');
     insertPassThrough(bad, defaultTable());
     bad.image[imageOffset(bad, 0x12695)] = 0x90;
     let threw = false;
-    try { insertPriceIndex(bad, { thresholdK: 500, cap: 0 }); } catch { threw = true; }
+    try { insertPriceIndex(bad, { threshold: 500000, cap: 0 }); } catch { threw = true; }
     check('掛鉤點被動過就拒絕插碼', threw);
+
+    // 設定要能從產出的 exe 讀回來（UI 靠這個把面板反白成現況）。
+    // ⚠ 讀回時不能用 imageOffset 找掛鉤點，也不能把 near jmp 的位移當有號數加——
+    //   前者在重新載入的映像上是恆等式（「經過就觸發」會把掛鉤點往後推），
+    //   後者忽略了段內繞回。兩個都踩過，讀出來是垃圾值。
+    const roundTrip = (pt: PassAction[] | null, pi: { threshold: number; cap: number } | null) => {
+      const w = loadExe(raw);
+      if (pt) insertPassThrough(w, pt);
+      if (pi) insertPriceIndex(w, pi);
+      return readPriceIndexSettings(loadExe(buildExe(w)));
+    };
+    const t1 = defaultTable(); t1[3] = 1;
+    const r1 = roundTrip(null, { threshold: 500000, cap: 8 });
+    check('設定讀得回來（只有物價指數）', r1?.threshold === 500000 && r1?.cap === 8);
+    const r2 = roundTrip(t1, { threshold: 300000, cap: 0 });
+    check('設定讀得回來（跟經過就觸發疊在一起）', r2?.threshold === 300000 && r2?.cap === 0);
+    check('沒插物價指數就回 null', roundTrip(t1, null) === null && roundTrip(null, null) === null);
+
+    // 「只漲不落」是預設；允許回落就是把 cmp ax,cs:[IDX] 那段拿掉。
+    const fall = mk({ threshold: 500000, cap: 0, noHighWater: true });
+    const cf = imageOffset(fall, 0x1c6a0) - fall.inserts![1].bytes;
+    const hw = [0x2e, 0x3b, 0x06].join(',');
+    check('預設是只漲不落（有 cmp ax,cs:[IDX]）',
+      x.image.subarray(cave, cave + VAR_AT).join(',').includes(hw));
+    check('允許回落就不發出那段比較',
+      !fall.image.subarray(cf, cf + VAR_AT).join(',').includes(hw));
+    const rf = roundTrip(null, { threshold: 500000, cap: 0, noHighWater: true });
+    check('允許回落讀得回來', rf?.noHighWater === true);
+    check('只漲不落讀得回來', roundTrip(null, { threshold: 500000, cap: 0 })?.noHighWater === false);
   }
 }
 

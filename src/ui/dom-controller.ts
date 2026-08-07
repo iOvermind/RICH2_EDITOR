@@ -19,7 +19,7 @@ import {
 import {
   MAPS, CHAR_TABLE_FILE, isSupported as fsSupported, backendKind, hasFolder, pickGameFolder,
   readFile as readGameFile, tryReadFile, writeFile as writeGameFile, patchExe, readSpecialCount, readCaps,
-  readPassSettings,
+  readPassSettings, readPriceIndex,
 } from '../core/gamefolder';
 import { loadGlyphAtlas, atlasReady, canAddChar, addCharsToGameFont } from '../core/gamefont';
 import { History } from '../core/history';
@@ -115,6 +115,29 @@ let passTable: PassAction[] = defaultTable();
 
 function currentPassTable(): PassAction[] { return passTable; }
 
+// 物價指數也是全域設定，跟「經過就觸發」同一頁。門檻 0 = 關閉。
+let priceIndex = { threshold: 0, cap: 0, noHighWater: false };
+
+function currentPriceIndex(): { threshold: number; cap: number; noHighWater: boolean } | null {
+  return priceIndex.threshold > 0 ? { ...priceIndex } : null;
+}
+
+/** 讀 UI 的兩個輸入框。非數字或負數一律當 0（＝關閉），不讓壞值寫進 exe。 */
+function readPriceIndexInputs(): void {
+  const num = (id: string, max: number): number => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    const v = Math.floor(Number(el?.value));
+    return Number.isFinite(v) && v > 0 ? Math.min(v, max) : 0;
+  };
+  // 門檻是 32 位元（單位元），上限是 u16。
+  const fall = (document.getElementById('priceIndexFall') as HTMLInputElement | null)?.checked ?? false;
+  priceIndex = {
+    threshold: num('priceIndexThreshold', 0x7fffffff),
+    cap: num('priceIndexCap', 0xffff),
+    noHighWater: fall,
+  };
+}
+
 /** 打開引擎頁時把 Run.exe 現在的設定讀回來反白。讀不到就維持原版行為。 */
 async function refreshEngineTab(): Promise<void> {
   const status = document.getElementById('passStatus');
@@ -126,6 +149,28 @@ async function refreshEngineTab(): Promise<void> {
   } catch {
     if (status) status.textContent = '還沒選遊戲資料夾，下面顯示的是原版行為。';
   }
+
+  const piStatus = document.getElementById('priceIndexStatus');
+  try {
+    const cur = await readPriceIndex();
+    priceIndex = cur ?? { threshold: 0, cap: 0, noHighWater: false };
+    if (piStatus) piStatus.textContent = cur
+      ? `目前的 Run.exe 已套用：門檻 ${cur.threshold} 元、上限 ${cur.cap || '無'}、${cur.noHighWater ? '允許回落' : '只漲不落'}。`
+      : '目前的 Run.exe 沒有物價指數。';
+  } catch {
+    priceIndex = { threshold: 0, cap: 0, noHighWater: false };
+    if (piStatus) piStatus.textContent = '';
+  }
+  const thrEl = document.getElementById('priceIndexThreshold') as HTMLInputElement | null;
+  const capEl = document.getElementById('priceIndexCap') as HTMLInputElement | null;
+  const fallEl = document.getElementById('priceIndexFall') as HTMLInputElement | null;
+  if (thrEl) thrEl.value = String(priceIndex.threshold);
+  if (capEl) capEl.value = String(priceIndex.cap);
+  if (fallEl) fallEl.checked = priceIndex.noHighWater;
+  fallEl?.addEventListener('change', readPriceIndexInputs);
+  thrEl?.addEventListener('change', readPriceIndexInputs);
+  capEl?.addEventListener('change', readPriceIndexInputs);
+
   renderEngineTab();
 }
 
@@ -2246,13 +2291,18 @@ async function saveToGame(): Promise<void> {
     }
 
     const maxLocByMap = await computeMaxLocByMap();
-    const r = await patchExe(logMsg, currentMapIndex, sc, maxLocByMap, currentPassTable());
+    readPriceIndexInputs();
+    const r = await patchExe(logMsg, currentMapIndex, sc, maxLocByMap, currentPassTable(), currentPriceIndex());
     logMsg(`✅ 已一次性寫回：${loadedDskFileName}、${loadedPakFileName}、Run.exe`);
     if (r.passThrough) {
       const on = currentPassTable()
         .map((v, k) => (v === 1 ? KIND_NAMES[k] ?? `種類${k}` : null)).filter(Boolean);
       logMsg(`　Run.exe：經過就觸發 → ${on.length ? on.join('、') : '（無）'}` +
         `　※ 已換成未壓縮版（原版是 EXEPACK 壓縮，程式碼段沒有插碼的餘裕）`);
+    }
+    if (r.priceIndex) {
+      logMsg(`　Run.exe：物價指數 → 資產總值每滿 ${priceIndex.threshold} 元，過路費 +1 倍` +
+        `（上限 ${priceIndex.cap || '無'}、${priceIndex.noHighWater ? '允許回落' : '只漲不落'}）`);
     }
     if (r.maxLocChanged > 0) {
       logMsg(`　Run.exe：${r.maxLocChanged} 張圖的地點上限已對齊各圖實際用到的最大編號` +

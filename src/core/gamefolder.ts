@@ -5,6 +5,7 @@
 import { backend } from './folder-backend';
 import { loadExe, buildExe, readCap, writeCap, type ExeImage } from './exe';
 import { insertPassThrough, defaultTable, isDefaultTable, readPassTable, type PassAction } from './passthrough';
+import { insertPriceIndex, isPriceIndexOff, readPriceIndexSettings, type PriceIndexOptions } from './priceindex';
 
 export interface MapDef {
     name: string;   // 顯示名稱
@@ -102,6 +103,11 @@ export async function readPassSettings(): Promise<PassAction[]> {
     return readPassTable(loadExe(new Uint8Array(await readFile(EXE_NAME))));
 }
 
+/** 讀出 Run.exe 目前的物價指數設定；沒插碼就回 null。 */
+export async function readPriceIndex(): Promise<{ threshold: number; cap: number; noHighWater: boolean } | null> {
+    return readPriceIndexSettings(loadExe(new Uint8Array(await readFile(EXE_NAME))));
+}
+
 /** 讀出 Run.exe 目前三張圖的容量設定，用來回報「現在到底是什麼狀態」。 */
 export async function readCaps(): Promise<MapCaps[]> {
     const x = loadExe(new Uint8Array(await readFile(EXE_NAME)));
@@ -128,6 +134,8 @@ export interface PatchExeResult {
     wrote: boolean;
     /** 這次輸出的 Run.exe 有沒有含「經過就觸發」的跳板 */
     passThrough: boolean;
+    /** 這次輸出的 Run.exe 有沒有含「物價指數」的跳板 */
+    priceIndex: boolean;
 }
 
 /**
@@ -147,6 +155,8 @@ export async function patchExe(
     maxLocByMap?: (number | null)[],
     /** 「經過就觸發」的種類表；不給就是原版行為（只有銀行的過路處理） */
     passTable?: PassAction[],
+    /** 物價指數設定；不給或門檻 0 就不插碼 */
+    priceIndexOpt?: PriceIndexOptions | null,
 ): Promise<PatchExeResult> {
     if (!(await ensureReadWrite())) throw new Error('沒有資料夾寫入權限');
     const x = await pristineExe(logMsg);
@@ -181,9 +191,13 @@ export async function patchExe(
     const passThrough = !isDefaultTable(table);
     if (passThrough) insertPassThrough(x, table);
 
+    // ⚠ 一定要在 insertPassThrough **之後**：兩塊跳板的位移會疊加，順序反了就對不上。
+    const priceIndex = !!priceIndexOpt && !isPriceIndexOff(priceIndexOpt);
+    if (priceIndex) insertPriceIndex(x, priceIndexOpt!);
+
     const out = buildExe(x);
     const cur = new Uint8Array(await readFile(EXE_NAME));
     const same = cur.length === out.length && cur.every((v, i) => v === out[i]);
     if (!same) await backend.write(EXE_NAME, out);
-    return { maxLocChanged, specialChanged, specialFrom, specialTo, wrote: !same, passThrough };
+    return { maxLocChanged, specialChanged, specialFrom, specialTo, wrote: !same, passThrough, priceIndex };
 }
